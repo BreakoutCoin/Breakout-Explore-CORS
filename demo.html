@@ -13,6 +13,7 @@
   legend { font-weight: 600; padding: 0 .4rem; }
   fieldset.auth { border-color: #2b6cb0aa; }
   label { display: inline-block; min-width: 5.5rem; vertical-align: top; }
+  select { padding: .35rem .5rem; border: 1px solid #8886; border-radius: 6px; font: inherit; }
   input, textarea { padding: .35rem .5rem; border: 1px solid #8886; border-radius: 6px; margin: .15rem 0; font: inherit; }
   input[type=text].wide, textarea.wide { width: min(100%, 30rem); }
   textarea.wide { height: 3.2rem; font-family: ui-monospace, monospace; font-size: .85rem; }
@@ -29,9 +30,18 @@
 <p><small>Talks to the CORS proxy, not the RPC directly. Use the <b>https://</b> URL — a secure page can't call a plaintext http:// endpoint (mixed content).</small></p>
 
 <div class="row">
-  <label>Proxy URL</label>
-  <input id="proxy" type="text" class="wide" value="https://explore.brk.zone">
+  <label>Server</label>
+  <select id="proxy-pick" onchange="onPickServer()">
+    <option value="">— choose or type below —</option>
+  </select>
+  <button type="button" onclick="loadPeers()">Discover peers</button>
 </div>
+<div class="row">
+  <label>Proxy URL</label>
+  <input id="proxy" type="text" class="wide" placeholder="https://your-proxy-host">
+</div>
+<div class="row"><small id="instanceState">Set a proxy URL, then "Discover peers" to
+  populate the list from the server's own index.</small></div>
 
 <!-- ============ OPEN READS — ADDRESS ============ -->
 <fieldset>
@@ -167,6 +177,59 @@ let AUTH_TOKEN = null;   // bearer token from /auth/verify
 let LAST_NONCE = null;   // nonce tied to the current challenge
 
 function proxyBase() { return document.getElementById('proxy').value.replace(/\/+$/, ''); }
+
+// The servers offered in the pulldown. Seeded from ?server= / ?peers= in this
+// page's own URL so the file itself hardcodes no hostname, then extended by
+// whatever the live server reports as its peers.
+const SERVERS = [];
+
+function seedServers() {
+  const q = new URLSearchParams(location.search);
+  const first = q.get('server');
+  if (first) document.getElementById('proxy').value = first;
+  const seed = [first].concat((q.get('peers') || '').split(','))
+    .map((h) => (h || '').trim()).filter(Boolean);
+  seed.forEach(addServer);
+  if (first) document.getElementById('proxy-pick').value = toUrl(first);
+}
+
+function toUrl(host) {
+  return /^https?:\/\//.test(host) ? host.replace(/\/+$/, '') : 'https://' + host;
+}
+
+function addServer(host) {
+  const u = toUrl(host);
+  if (SERVERS.includes(u)) return;
+  SERVERS.push(u);
+  const opt = document.createElement('option');
+  opt.value = u;
+  opt.textContent = u.replace(/^https?:\/\//, '');
+  document.getElementById('proxy-pick').appendChild(opt);
+}
+
+function onPickServer() {
+  const v = document.getElementById('proxy-pick').value;
+  if (v) document.getElementById('proxy').value = v;
+}
+
+// Ask the current server who it is and who it can fail over to. This is how a
+// wallet builds its server list without shipping one.
+async function loadPeers() {
+  const st = document.getElementById('instanceState');
+  if (!proxyBase()) { st.textContent = 'Enter a proxy URL first.'; return; }
+  try {
+    const r = await (await fetch(proxyBase() + '/')).json();
+    if (!r.ok) { st.textContent = 'Index returned an error.'; return; }
+    if (r.instance) addServer(r.instance);
+    (r.peers || []).forEach(addServer);
+    document.getElementById('proxy-pick').value = toUrl(r.instance || proxyBase());
+    st.textContent = `Connected to ${r.instance || proxyBase()}` +
+      `, signing realm "${r.site_name || '?'}"` +
+      `, ${(r.peers || []).length} peer(s) offered.`;
+  } catch (e) {
+    st.textContent = 'Could not reach that server: ' + e.message;
+  }
+}
 function show(obj) { document.getElementById('out').textContent = JSON.stringify(obj, null, 2); }
 function val(id) { return document.getElementById(id).value; }
 
@@ -179,6 +242,8 @@ async function rpc(method, params) {
   const res = await fetch(`${proxyBase()}/${method}${qs ? '?' + qs : ''}`);
   return res.json();
 }
+
+seedServers();
 
 // --- open reads: address -------------------------------------------------
 async function callAddrBalance() {

@@ -48,6 +48,9 @@
  *   RPC_URL           upstream RPC base URL             (default http://127.0.0.1:50542)
  *   RPC_USER/RPC_PASS RPC credentials                   (or use RPC_CONF)
  *   RPC_CONF          path to breakout.conf for creds
+ *   PUBLIC_HOST       this instance's public FQDN       (default: unset)
+ *   PEERS             comma-separated failover hostnames (default: none)
+ *   SITE_NAME         signing realm in the challenge    (default: PUBLIC_HOST)
  *   ALLOW_ORIGIN      Access-Control-Allow-Origin       (default *)
  *   REQUIRE_AUTH      gate sendrawtransaction           (default true)
  *   AUTH_SECRET       HMAC key for tokens               (default: random per start)
@@ -71,6 +74,21 @@ const PORT = parseInt(process.env.PORT || '3333', 10);
 const HOST = process.env.HOST || '127.0.0.1';
 const RPC_URL = process.env.RPC_URL || 'http://127.0.0.1:50542';
 const ALLOW_ORIGIN = process.env.ALLOW_ORIGIN || '*';
+
+// Identity and failover. PUBLIC_HOST is this instance's public FQDN; PEERS
+// lists equivalent instances a client may fail over to. Both are advertised
+// by the index so a wallet can populate its server pulldown from the server
+// itself rather than hardcoding a list.
+const PUBLIC_HOST = process.env.PUBLIC_HOST || '';
+const PEERS = (process.env.PEERS || '')
+  .split(',').map((h) => h.trim()).filter(Boolean);
+
+// The realm named in the message a user signs during auth. It is deliberately
+// NOT derived from the Host header: that is attacker-controlled, and a signer
+// must be shown a realm the operator chose. Instances that share an
+// AUTH_SECRET must also share SITE_NAME, or a token minted on one will name a
+// different realm than the other advertises.
+const SITE_NAME = process.env.SITE_NAME || PUBLIC_HOST || 'breakout-cors-proxy';
  
 const REQUIRE_AUTH = (process.env.REQUIRE_AUTH || 'true').toLowerCase() !== 'false';
 const AUTH_SECRET = process.env.AUTH_SECRET || crypto.randomBytes(32).toString('hex');
@@ -287,7 +305,7 @@ function issueChallenge(address) {
   const issued = nowSec();
   const exp = issued + CHALLENGE_TTL;
   const message = [
-    `explore.brk.zone: prove control of ${address}`,
+    `${SITE_NAME}: prove control of ${address}`,
     `nonce: ${nonce}`,
     `issued: ${issued}`,
     `valid until: ${exp}`,
@@ -389,6 +407,9 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, {
       ok: true,
       service: 'breakout-cors-proxy',
+      instance: PUBLIC_HOST || null,
+      peers: PEERS,
+      site_name: SITE_NAME,
       upstream: RPC_URL,
       auth: { required_for: [...AUTH_REQUIRED_METHODS], enabled: REQUIRE_AUTH, token_ttl: TOKEN_TTL },
       methods: Object.keys(METHODS).map((m) => ({
@@ -493,6 +514,9 @@ function probeVerifyMessage() {
 server.listen(PORT, HOST, () => {
   console.log(`breakout-cors-proxy listening on http://${HOST}:${PORT}`);
   console.log(`  -> forwarding to ${RPC_URL} (CORS: ${ALLOW_ORIGIN})`);
+  console.log(`  -> identity: ${PUBLIC_HOST || '(PUBLIC_HOST unset)'}` +
+              `, signing realm "${SITE_NAME}"` +
+              `${PEERS.length ? `, peers: ${PEERS.join(', ')}` : ''}`);
   console.log(`  -> public: ${Object.keys(METHODS).join(', ')}`);
   console.log(`  -> auth: ${REQUIRE_AUTH ? `ON — ${[...AUTH_REQUIRED_METHODS].join(', ')} gated (token ${TOKEN_TTL}s)` : 'OFF'}`);
   if (REQUIRE_AUTH && !process.env.AUTH_SECRET) {

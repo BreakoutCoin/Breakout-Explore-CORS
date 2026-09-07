@@ -11,6 +11,8 @@ server-side, exposes only an explicit whitelist of methods, and gates
   or Caddy, TLS, troubleshooting.
 - **[demo.html](demo.html)** — browser test client for every endpoint and the
   full auth → broadcast flow.
+- **[setup.sh](setup.sh)** + **[templates/](templates/)** — generate the systemd
+  unit and reverse-proxy configs for a given hostname.
 
 ## Endpoints
 
@@ -62,7 +64,7 @@ spending already controls funded inputs). The handshake:
 ### Example (curl)
 
 ```bash
-BASE=https://explore.brk.zone
+BASE=https://explore.brk.zone     # or any instance you run
 ADDR=bx...
 
 # 1. challenge
@@ -116,12 +118,61 @@ back (default 100), so `start=101&max=100` is the second hundred richest.
 ## Run it
 
 ```bash
-RPC_CONF=/home/jstroud/.breakout/breakout.conf node breakout-cors-proxy.js
+RPC_CONF=/home/you/.breakout/breakout.conf node breakout-cors-proxy.js
 # or: RPC_USER=you RPC_PASS=secret node breakout-cors-proxy.js
 ```
 
 Behind Apache/Caddy terminating TLS, keep it bound to loopback (`HOST=127.0.0.1`,
 the default).
+
+## Deploy it
+
+The proxy hardcodes no hostname — the domain lives only in the systemd unit and
+the reverse-proxy vhost, both of which `setup.sh` generates from
+[`templates/`](templates/):
+
+```bash
+./setup.sh --domain explore.brk.zone
+```
+
+That writes `generated/explore.brk.zone/` containing the unit, the Apache and
+Caddy configs, a copy of the proxy, and an `install.sh` to run as root on the
+server. It generates only — nothing is installed and no service is touched.
+`./setup.sh --help` lists every option; [SETUP_GUIDE.md](SETUP_GUIDE.md) walks
+through a full deployment.
+
+## Running more than one instance
+
+Wallets can be pointed at a second, interchangeable instance when the first is
+unreachable. Generate each with the **same** `--auth-secret` and `--site-name`,
+and tell each about the other:
+
+```bash
+SECRET=$(openssl rand -hex 32)
+./setup.sh --domain explore.brk.zone --site-name brk.zone \
+           --peers api.brk.zone --auth-secret "$SECRET"
+./setup.sh --domain api.brk.zone --site-name brk.zone \
+           --peers explore.brk.zone --auth-secret "$SECRET"
+```
+
+Each instance then advertises itself and its peers at `GET /`:
+
+```json
+{"ok":true,"instance":"explore.brk.zone","peers":["api.brk.zone"],"site_name":"brk.zone"}
+```
+
+so a client can build its server list from the server instead of shipping one.
+What does and does not survive a failover:
+
+| | Carries across instances? |
+|---|---|
+| Read endpoints | Yes — stateless and identical |
+| A minted token | Only if the instances share `AUTH_SECRET` |
+| An outstanding challenge/nonce | **No** — nonces are per-process and in memory |
+
+So a client that fails over mid-session can keep using its token where the
+secret is shared, but must always restart the challenge → verify handshake
+against whichever instance it is now talking to.
 
 ## Configuration (environment variables)
 
@@ -132,6 +183,9 @@ the default).
 | `RPC_URL` | `http://127.0.0.1:50542` | Upstream RPC base URL |
 | `RPC_USER` / `RPC_PASS` | — | RPC credentials (or use `RPC_CONF`) |
 | `RPC_CONF` | — | Path to `breakout.conf` to read creds from |
+| `PUBLIC_HOST` | — | This instance's public FQDN, advertised as `instance` by `GET /` |
+| `PEERS` | — | Comma-separated hostnames of equivalent instances, advertised as `peers` |
+| `SITE_NAME` | `PUBLIC_HOST` | Realm named in the message users sign. Instances sharing `AUTH_SECRET` must share this too |
 | `ALLOW_ORIGIN` | `*` | `Access-Control-Allow-Origin` value |
 | `REQUIRE_AUTH` | `true` | Gate `sendrawtransaction`; set `false` to leave it open |
 | `AUTH_SECRET` | random per start | HMAC key for tokens. **Set this** to keep tokens valid across restarts / multiple instances |
@@ -152,6 +206,9 @@ the systemd unit:
 Environment=AUTH_SECRET=<a long random string, e.g. `openssl rand -hex 32`>
 ```
 
+`setup.sh` generates one for you and reminds you to reuse it across a failover
+pair.
+
 ## Security notes
 
 - **CORS is not access control.** `ALLOW_ORIGIN` only constrains browsers;
@@ -160,8 +217,13 @@ Environment=AUTH_SECRET=<a long random string, e.g. `openssl rand -hex 32`>
 - Requires the node's `verifymessage` RPC. If it's missing, `/auth/verify`
   returns a 501 and the proxy logs a warning at startup.
 - Signature verification proves *control* of an address, not identity, and the
-  signed message is domain-bound and explicitly states it does not authorize
-  spending — so wallets aren't training users to blind-sign dangerous text.
+  signed message names a realm (`SITE_NAME`) and explicitly states it does not
+  authorize spending — so wallets aren't training users to blind-sign dangerous
+  text. `SITE_NAME` is deliberately **not** taken from the `Host` header: that is
+  attacker-controlled, and a signer must be shown a realm the operator chose.
+- `peers` is operator-declared configuration, not a health check or a trust
+  statement. A client should treat a peer as a candidate to try, and re-verify
+  anything security-relevant against whichever instance actually answers.
 - The fund gate blocks spam from empty/Sybil addresses but not from a
   determined *funded* attacker; that's what `BROADCAST_MAX` / `BROADCAST_WINDOW`
   are for.

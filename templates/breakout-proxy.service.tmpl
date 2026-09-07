@@ -1,0 +1,49 @@
+# Generated from templates/breakout-proxy.service.tmpl by setup.sh.
+# Edit the template, not this file — regenerating overwrites it.
+#
+# Install to /etc/systemd/system/@SERVICE_NAME@.service
+
+[Unit]
+Description=Breakout Explore CORS proxy (@DOMAIN@)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+
+# The proxy listens on loopback only; the reverse proxy terminates TLS on 443
+# and forwards to it. systemd gives the service a clean environment, so a stray
+# HOST= from an interactive shell is not inherited — but pin it anyway.
+Environment=HOST=127.0.0.1
+Environment=PORT=@PORT@
+Environment=RPC_CONF=@RPC_CONF@
+Environment=RPC_URL=@RPC_URL@
+
+# This instance's public identity, advertised by the index at "/" so a wallet
+# can discover its failover options instead of hardcoding them.
+Environment=PUBLIC_HOST=@DOMAIN@
+Environment=PEERS=@PEERS@
+
+# The realm shown to a user when they sign an auth challenge. Every instance
+# sharing AUTH_SECRET must also share SITE_NAME.
+Environment=SITE_NAME=@SITE_NAME@
+
+# HMAC key for auth tokens. Instances that should accept each other's tokens
+# must share this value; leave it unset and every restart invalidates all
+# live tokens.
+Environment=AUTH_SECRET=@AUTH_SECRET@
+
+WorkingDirectory=@INSTALL_DIR@
+ExecStart=@NODE_BIN@ @INSTALL_DIR@/breakout-cors-proxy.js
+
+Restart=on-failure
+RestartSec=3
+
+# light hardening
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+# Generated from templates/Caddyfile.tmpl by setup.sh.
+# Install to /etc/caddy/Caddyfile
+#
+# Caddy obtains and renews the certificate automatically — no certbot needed.
+# Use this only on a host where nothing else holds ports 80/443.
+#
+# Do NOT add CORS headers here; the Node proxy already sets them.
+
+@DOMAIN@ {
+	reverse_proxy 127.0.0.1:@PORT@
+}

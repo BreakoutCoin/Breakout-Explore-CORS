@@ -1,6 +1,9 @@
 # Breakout Explore CORS Proxy — Agent API
 
-Base: `https://explore.brk.zone`
+Base: any instance of the proxy, e.g. `https://explore.brk.zone`. The service is
+not tied to one hostname; an operator may run several interchangeable instances.
+Discover them at runtime rather than hardcoding a list — see **Instances and
+failover** below.
 
 HTTP proxy over a Breakout `breakoutd` node. Reads are open. Broadcasting requires a bearer token proving control of a funded address.
 
@@ -89,7 +92,7 @@ Constraints:
 - Server restart invalidates live tokens unless `AUTH_SECRET` is pinned.
 
 ```bash
-BASE=https://explore.brk.zone
+BASE=https://explore.brk.zone     # or any instance the index advertises
 
 curl -s "$BASE/auth/challenge?address=bx..."
 
@@ -101,6 +104,37 @@ curl -s -X POST "$BASE/sendrawtransaction" \
      -H "Authorization: Bearer TOKEN" \
      --data-binary '0100000001...'
 ```
+
+## Instances and failover
+
+`GET /` identifies the instance you reached and lists equivalent ones:
+
+```json
+{"ok":true,"service":"breakout-cors-proxy",
+ "instance":"explore.brk.zone","peers":["api.brk.zone"],
+ "site_name":"brk.zone", "...":"..."}
+```
+
+- `instance` — this server's own public hostname, or `null` if the operator did
+  not set one.
+- `peers` — other hostnames serving the same chain and method set. Treat as
+  failover candidates, in no particular order.
+- `site_name` — the realm named in the message users sign during auth.
+
+**Client guidance.** Fetch `/` once at startup from any known instance, union
+`instance` with `peers`, and keep that list. On a transport failure or 5xx,
+retry the same request against another entry — read endpoints are stateless and
+identical across instances, so failover needs no extra state.
+
+Auth does not carry across quite so freely:
+
+- **Nonces are per-instance and in memory.** A challenge from one host can only
+  be verified by that same host. After failing over, start a new challenge.
+- **Tokens carry only if the operator shares `AUTH_SECRET`** across instances.
+  Where it is shared, a token minted anywhere is accepted everywhere until it
+  expires. Where it is not, expect `401` after failover and re-authenticate.
+- `peers` reflects operator configuration, not a health check. A listed peer may
+  still be down; treat the list as candidates, not guarantees.
 
 ## Errors
 

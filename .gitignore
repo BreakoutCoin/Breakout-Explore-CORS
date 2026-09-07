@@ -17,6 +17,9 @@ _bak/
 node_modules/
 npm-debug.log*
 
+# setup.sh output — populated unit files containing a live AUTH_SECRET
+generated/
+
 # never commit real credentials or a populated unit file
 breakout.conf
 *.pem

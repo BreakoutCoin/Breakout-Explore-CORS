@@ -1,0 +1,21 @@
+# Generated from templates/apache-http.conf.tmpl by setup.sh.
+# Install to /etc/apache2/sites-available/@DOMAIN@.conf
+#
+# Port 80 vhost. Before certbot runs this must proxy (certbot reads ServerName
+# from it); after certbot has issued the cert, swap to the redirect block below
+# so plain HTTP bounces to HTTPS. See SETUP_GUIDE.md section 4.
+
+<VirtualHost *:80>
+    ServerName @DOMAIN@
+
+    # --- Stage 1: pre-certbot. Comment out once the cert exists. ---
+    ProxyPreserveHost On
+    ProxyPass        / http://127.0.0.1:@PORT@/
+    ProxyPassReverse / http://127.0.0.1:@PORT@/
+
+    # --- Stage 2: post-certbot. Uncomment these, comment out the three
+    #     ProxyPass lines above, then reload Apache. ---
+    # RewriteEngine On
+    # RewriteCond %{HTTPS} off
+    # RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [END,NE,R=permanent]
+</VirtualHost>

@@ -1,0 +1,25 @@
+# Generated from templates/apache-ssl.conf.tmpl by setup.sh.
+# Install to /etc/apache2/sites-available/@DOMAIN@-le-ssl.conf
+#
+# Port 443 vhost. certbot normally writes this file itself during
+# `certbot --apache -d @DOMAIN@`; this template is here so the deployment can
+# be reproduced or audited without re-running certbot. If certbot already
+# manages the file, leave it alone rather than overwriting it.
+#
+# Do NOT add CORS headers here — the Node proxy sets them and answers the
+# OPTIONS preflight itself. A duplicated Access-Control-Allow-Origin makes
+# browsers reject the response.
+
+<IfModule mod_ssl.c>
+<VirtualHost *:443>
+    ServerName @DOMAIN@
+
+    ProxyPreserveHost On
+    ProxyPass        / http://127.0.0.1:@PORT@/
+    ProxyPassReverse / http://127.0.0.1:@PORT@/
+
+SSLCertificateFile /etc/letsencrypt/live/@DOMAIN@/fullchain.pem
+SSLCertificateKeyFile /etc/letsencrypt/live/@DOMAIN@/privkey.pem
+Include /etc/letsencrypt/options-ssl-apache.conf
+</VirtualHost>
+</IfModule>
