@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Breakout Explore — RPC via CORS proxy</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: 1rem; }
+  fieldset { border: 1px solid #8886; border-radius: 8px; margin: 0 0 1.25rem; padding: .9rem 1rem; }
+  legend { font-weight: 600; padding: 0 .4rem; }
+  fieldset.auth { border-color: #2b6cb0aa; }
+  label { display: inline-block; min-width: 5.5rem; vertical-align: top; }
+  input, textarea { padding: .35rem .5rem; border: 1px solid #8886; border-radius: 6px; margin: .15rem 0; font: inherit; }
+  input[type=text].wide, textarea.wide { width: min(100%, 30rem); }
+  textarea.wide { height: 3.2rem; font-family: ui-monospace, monospace; font-size: .85rem; }
+  button { padding: .4rem .9rem; border: 0; border-radius: 6px; background: #2b6cb0; color: #fff; cursor: pointer; }
+  button:hover { background: #245a94; }
+  pre { background: #8881; padding: .75rem; border-radius: 6px; overflow: auto; max-height: 18rem; }
+  .row { margin: .3rem 0; }
+  small { opacity: .7; }
+  #tokenState { font-family: ui-monospace, monospace; font-size: .85rem; }
+</style>
+</head>
+<body>
+<h1>Breakout Explore — browser client</h1>
+<p><small>Talks to the CORS proxy, not the RPC directly. Use the <b>https://</b> URL — a secure page can't call a plaintext http:// endpoint (mixed content).</small></p>
+
+<div class="row">
+  <label>Proxy URL</label>
+  <input id="proxy" type="text" class="wide" value="https://explore.brk.zone">
+</div>
+
+<!-- ============ OPEN READS — ADDRESS ============ -->
+<fieldset>
+  <legend>getaddressbalance</legend>
+  <div class="row"><label>address</label><input id="abal-addr" type="text" class="wide" placeholder="bx..."></div>
+  <button onclick="callAddrBalance()">Get balance</button>
+</fieldset>
+
+<fieldset>
+  <legend>getaddressinfo</legend>
+  <div class="row"><label>address</label><input id="ainfo-addr" type="text" class="wide" placeholder="bx..."></div>
+  <button onclick="callAddrInfo()">Get info</button>
+</fieldset>
+
+<fieldset>
+  <legend>getaddressutxospg</legend>
+  <div class="row"><label>address</label><input id="autxo-addr" type="text" class="wide" placeholder="bx..."></div>
+  <div class="row"><label>page</label><input id="autxo-page" type="text" value="1"></div>
+  <div class="row"><label>perpage</label><input id="autxo-perpage" type="text" value="50"></div>
+  <div class="row"><label>ordering</label><input id="autxo-ordering" type="text" placeholder="(optional, true/false)"></div>
+  <button onclick="callAddrUtxos()">Get UTXOs</button>
+</fieldset>
+
+<fieldset>
+  <legend>getaddressinoutspg</legend>
+  <div class="row"><label>address</label><input id="ainout-addr" type="text" class="wide" placeholder="bx..."></div>
+  <div class="row"><label>page</label><input id="ainout-page" type="text" value="1"></div>
+  <div class="row"><label>perpage</label><input id="ainout-perpage" type="text" value="50"></div>
+  <div class="row"><label>ordering</label><input id="ainout-ordering" type="text" placeholder="(optional, true/false)"></div>
+  <button onclick="callAddrInouts()">Get in/outs</button>
+</fieldset>
+
+<!-- ============ OPEN READS — HD ACCOUNT ============ -->
+<fieldset>
+  <legend>gethdaccountbalance</legend>
+  <div class="row"><label>xpub</label><input id="bal-xpub" type="text" class="wide" placeholder="xpub..."></div>
+  <div class="row"><label>color</label><input id="bal-color" type="text" placeholder="(optional, e.g. 2)"></div>
+  <button onclick="callBalance()">Get balance</button>
+</fieldset>
+
+<fieldset>
+  <legend>gethdaccountinoutspg</legend>
+  <div class="row"><label>xpub</label><input id="io-xpub" type="text" class="wide" placeholder="xpub..."></div>
+  <div class="row"><label>page</label><input id="io-page" type="text" value="1"></div>
+  <div class="row"><label>perpage</label><input id="io-perpage" type="text" value="50"></div>
+  <div class="row"><label>ordering</label><input id="io-ordering" type="text" placeholder="(optional, true/false)"></div>
+  <div class="row"><label>color</label><input id="io-color" type="text" placeholder="(optional)"></div>
+  <button onclick="callInouts()">Get in/outs</button>
+</fieldset>
+
+<fieldset>
+  <legend>gethdaccountutxospg</legend>
+  <div class="row"><label>xpub</label><input id="utxo-xpub" type="text" class="wide" placeholder="xpub..."></div>
+  <div class="row"><label>page</label><input id="utxo-page" type="text" value="1"></div>
+  <div class="row"><label>perpage</label><input id="utxo-perpage" type="text" value="50"></div>
+  <div class="row"><label>ordering</label><input id="utxo-ordering" type="text" placeholder="(optional, true/false)"></div>
+  <div class="row"><label>color</label><input id="utxo-color" type="text" placeholder="(optional)"></div>
+  <button onclick="callUtxos()">Get UTXOs</button>
+</fieldset>
+
+<!-- ============ OPEN READS — CHAIN / EXPLORE ============ -->
+<fieldset>
+  <legend>getblockcount</legend>
+  <button onclick="callBlockCount()">Get block count</button>
+</fieldset>
+
+<fieldset>
+  <legend>getcardinfo</legend>
+  <div class="row"><label>ticker</label><input id="card-ticker" type="text" placeholder="e.g. DAS"></div>
+  <button onclick="callCardInfo()">Get card info</button>
+</fieldset>
+
+<fieldset>
+  <legend>getrichlist</legend>
+  <div class="row"><label>color</label><input id="rich-color" type="text" placeholder="e.g. 1"></div>
+  <div class="row"><label>start</label><input id="rich-start" type="text" placeholder="(optional, nth richest, default 1)"></div>
+  <div class="row"><label>max</label><input id="rich-max" type="text" placeholder="(optional, default 100)"></div>
+  <button onclick="callRichList()">Get rich list</button>
+</fieldset>
+
+<fieldset>
+  <legend>getrichlistpg</legend>
+  <div class="row"><label>color</label><input id="richpg-color" type="text" placeholder="e.g. 1"></div>
+  <div class="row"><label>page</label><input id="richpg-page" type="text" value="1"></div>
+  <div class="row"><label>perpage</label><input id="richpg-perpage" type="text" value="20"></div>
+  <div class="row"><label>ordering</label><input id="richpg-ordering" type="text" placeholder="(optional, true=richest first)"></div>
+  <button onclick="callRichListPg()">Get rich list page</button>
+</fieldset>
+
+<fieldset>
+  <legend>gettransaction</legend>
+  <div class="row"><label>txid</label><input id="tx-txid" type="text" class="wide" placeholder="tx id"></div>
+  <button onclick="callGetTransaction()">Get transaction</button>
+</fieldset>
+
+<!-- ============ AUTH (proof of funds) ============ -->
+<fieldset class="auth">
+  <legend>Authenticate to broadcast (proof of funds)</legend>
+  <p><small>Prove control of an address that holds a balance. Step&nbsp;2 (signing) happens in your
+     wallet — this page never sees a private key.</small></p>
+
+  <div class="row"><label>address</label><input id="auth-addr" type="text" class="wide" placeholder="bx... (a funded address you control)"></div>
+  <button onclick="getChallenge()">1 · Get challenge</button>
+
+  <div class="row" style="margin-top:.8rem"><label>message</label>
+    <textarea id="auth-msg" class="wide" readonly placeholder="challenge message to sign in your wallet appears here"></textarea>
+  </div>
+  <div class="row"><small>Sign that exact message with the address's key, e.g.
+    <code>breakoutd signmessage &lt;address&gt; "&lt;message&gt;"</code> in a wallet that holds it.</small></div>
+
+  <div class="row" style="margin-top:.8rem"><label>signature</label>
+    <textarea id="auth-sig" class="wide" placeholder="paste the base64 signature from your wallet"></textarea>
+  </div>
+  <button onclick="verifySig()">2 · Verify &amp; get token</button>
+
+  <div class="row" style="margin-top:.8rem"><label>token</label><span id="tokenState">— not authenticated —</span></div>
+</fieldset>
+
+<!-- ============ GATED BROADCAST ============ -->
+<fieldset>
+  <legend>sendrawtransaction (broadcast — requires token)</legend>
+  <div class="row"><label>raw hex</label><input id="tx-hex" type="text" class="wide" placeholder="0100000001..."></div>
+  <button onclick="callSend()">Broadcast</button>
+  <p><small>Sent via POST with your bearer token. The proxy re-checks your address is still funded on every broadcast.</small></p>
+</fieldset>
+
+<h2>Result</h2>
+<pre id="out">—</pre>
+
+<script>
+// --- state ---------------------------------------------------------------
+let AUTH_TOKEN = null;   // bearer token from /auth/verify
+let LAST_NONCE = null;   // nonce tied to the current challenge
+
+function proxyBase() { return document.getElementById('proxy').value.replace(/\/+$/, ''); }
+function show(obj) { document.getElementById('out').textContent = JSON.stringify(obj, null, 2); }
+function val(id) { return document.getElementById(id).value; }
+
+// GET /<method>?<params>, omitting blanks.
+async function rpc(method, params) {
+  const qs = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== '')
+    .map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(String(v).trim()))
+    .join('&');
+  const res = await fetch(`${proxyBase()}/${method}${qs ? '?' + qs : ''}`);
+  return res.json();
+}
+
+// --- open reads: address -------------------------------------------------
+async function callAddrBalance() {
+  show(await rpc('getaddressbalance', { address: val('abal-addr') }));
+}
+async function callAddrInfo() {
+  show(await rpc('getaddressinfo', { address: val('ainfo-addr') }));
+}
+async function callAddrUtxos() {
+  show(await rpc('getaddressutxospg', {
+    address: val('autxo-addr'), page: val('autxo-page'),
+    perpage: val('autxo-perpage'), ordering: val('autxo-ordering'),
+  }));
+}
+async function callAddrInouts() {
+  show(await rpc('getaddressinoutspg', {
+    address: val('ainout-addr'), page: val('ainout-page'),
+    perpage: val('ainout-perpage'), ordering: val('ainout-ordering'),
+  }));
+}
+
+// --- open reads: HD account ----------------------------------------------
+async function callBalance() {
+  show(await rpc('gethdaccountbalance', { xpub: val('bal-xpub'), color: val('bal-color') }));
+}
+async function callInouts() {
+  show(await rpc('gethdaccountinoutspg', {
+    xpub: val('io-xpub'), page: val('io-page'), perpage: val('io-perpage'),
+    ordering: val('io-ordering'), color: val('io-color'),
+  }));
+}
+async function callUtxos() {
+  show(await rpc('gethdaccountutxospg', {
+    xpub: val('utxo-xpub'), page: val('utxo-page'), perpage: val('utxo-perpage'),
+    ordering: val('utxo-ordering'), color: val('utxo-color'),
+  }));
+}
+
+// --- open reads: chain / explore ------------------------------------------
+async function callBlockCount() {
+  show(await rpc('getblockcount', {}));
+}
+async function callCardInfo() {
+  show(await rpc('getcardinfo', { ticker: val('card-ticker') }));
+}
+async function callGetTransaction() {
+  show(await rpc('gettransaction', { txid: val('tx-txid') }));
+}
+async function callRichList() {
+  show(await rpc('getrichlist', {
+    color: val('rich-color'), start: val('rich-start'), max: val('rich-max'),
+  }));
+}
+async function callRichListPg() {
+  show(await rpc('getrichlistpg', {
+    color: val('richpg-color'), page: val('richpg-page'),
+    perpage: val('richpg-perpage'), ordering: val('richpg-ordering'),
+  }));
+}
+
+// --- auth handshake ------------------------------------------------------
+async function getChallenge() {
+  const addr = val('auth-addr').trim();
+  if (!addr) { show({ error: 'enter an address first' }); return; }
+  const r = await rpc('auth/challenge', { address: addr });
+  show(r);
+  if (r.ok) {
+    LAST_NONCE = r.result.nonce;
+    document.getElementById('auth-msg').value = r.result.message;
+  }
+}
+
+async function verifySig() {
+  if (!LAST_NONCE) { show({ error: 'get a challenge first' }); return; }
+  const sig = val('auth-sig').trim();
+  if (!sig) { show({ error: 'paste the signature from your wallet' }); return; }
+  // POST as JSON — base64 signatures contain +/= which are unsafe in a query string.
+  const res = await fetch(`${proxyBase()}/auth/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nonce: LAST_NONCE, signature: sig }),
+  });
+  const r = await res.json();
+  show(r);
+  if (r.ok) {
+    AUTH_TOKEN = r.result.token;
+    const secs = r.result.expires - Math.floor(Date.now() / 1000);
+    document.getElementById('tokenState').textContent =
+      `authenticated as ${r.result.address} (expires in ~${Math.round(secs / 60)} min)`;
+  }
+}
+
+// --- gated broadcast -----------------------------------------------------
+async function callSend() {
+  if (!AUTH_TOKEN) { show({ error: 'authenticate first to get a token' }); return; }
+  const res = await fetch(`${proxyBase()}/sendrawtransaction`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain', 'Authorization': 'Bearer ' + AUTH_TOKEN },
+    body: val('tx-hex').trim(),
+  });
+  show(await res.json());
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+
+# Claude Code local settings (machine-specific tool permissions)
+.claude/
+
+# datestamp backups — these live in a _bak/ outside the tree, but never commit
+# one that lands here by accident: they can hold pre-sanitization secrets.
+_bak/
+[0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]-*
+
+# vim
+*~
+*.swp
+
+# node (the proxy is zero-dependency, but keep these out regardless)
+node_modules/
+npm-debug.log*
+
+# never commit real credentials or a populated unit file
+breakout.conf
+*.pem
+*.key
