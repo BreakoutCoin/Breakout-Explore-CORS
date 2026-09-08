@@ -102,8 +102,15 @@ generated it:
   `/etc/caddy/Caddyfile` — both may already serve other sites, or carry a
   post-certbot redirect you switched on by hand. It reports what to merge
   instead.
-- It finishes by checking that `GET /` reports the expected `instance`, so a
-  unit whose environment did not take effect is caught at install time.
+- It resolves `node` **on the server**, ignoring the path baked in by the
+  generating machine when that path is not executable there. Generating on
+  macOS for an Ubuntu host otherwise bakes in `/usr/local/bin/node` against a
+  server whose node is `/usr/bin/node`, and systemd reports only
+  `status=203/EXEC`.
+- It finishes by checking that `GET /` reports the expected `instance`, prints
+  the journal tail and **exits non-zero** if not — so a unit whose environment
+  did not take effect, or which never started, is caught at install time rather
+  than read as success.
 
 `./setup.sh --help` lists every option (`--port`, `--user`, `--install-dir`,
 `--rpc-conf`, `--node`, `--tls apache|caddy|both`, and the failover options in
@@ -404,6 +411,15 @@ and external connects were refused. *Lesson:* bind explicitly (`HOST=0.0.0.0` fo
 direct exposure, or `127.0.0.1` behind a reverse proxy). systemd gives the
 service a clean environment, so the stray shell var doesn't reach it there —
 which is exactly why the service works even though the manual run didn't.
+
+**2a. `status=203/EXEC` — the unit's `ExecStart` path does not exist.**
+`setup.sh` fills `ExecStart=` from `command -v node` on whatever machine runs
+it. Generate on macOS (`/usr/local/bin/node`), deploy to Ubuntu
+(`/usr/bin/node`), and systemd reports only `203/EXEC` — it will not say which
+component of the path is missing. *Lesson:* resolve interpreter paths on the
+host that will run them. `install.sh` now does this and rewrites `ExecStart`
+after installing the unit. Check an existing deployment with
+`systemctl cat breakout-proxy | grep ExecStart`.
 
 **2. systemd refused the unit — "Assignment outside of section / no ExecStart."**
 The comment block pasted into the unit carried smart punctuation (em-dashes) or

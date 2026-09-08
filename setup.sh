@@ -62,7 +62,9 @@ Placement:
   --rpc-conf <path>      breakout.conf to read RPC credentials from.
                          Default: /home/<user>/.breakout/breakout.conf
   --rpc-url <url>        Upstream RPC. Default: http://127.0.0.1:50542
-  --node <path>          node binary. Default: `command -v node`, else /usr/bin/node
+  --node <path>          node binary ON THE TARGET. Default: whatever this
+                         machine has, which install.sh re-resolves on the
+                         server if it is not executable there.
   --port <n>             Loopback port for this instance. Default: 3333
   --service-name <name>  systemd unit name, no .service suffix.
                          Default: breakout-proxy
@@ -237,8 +239,33 @@ install -d -o "$RUN_USER" -g "$RUN_USER" "$INSTALL_DIR"
 install -o "$RUN_USER" -g "$RUN_USER" -m 644 \\
         "\$SRC/breakout-cors-proxy.js" "$INSTALL_DIR/breakout-cors-proxy.js"
 
+echo "==> resolving node on THIS host"
+# The unit ships with whatever path the generating machine had, which is
+# routinely wrong across a macOS -> Linux hop (/usr/local/bin/node vs
+# /usr/bin/node) and shows up only as systemd status=203/EXEC. Trust the
+# generated path just far enough to check it is executable here.
+NODE="$NODE_BIN"
+if [ ! -x "\$NODE" ]; then
+	NODE=\$(command -v node 2>/dev/null || true)
+	if [ -z "\$NODE" ]; then
+		for c in /usr/bin/node /usr/local/bin/node /snap/bin/node /opt/node/bin/node; do
+			[ -x "\$c" ] && NODE="\$c" && break
+		done
+	fi
+	if [ -z "\$NODE" ] || [ ! -x "\$NODE" ]; then
+		echo "    ERROR: no usable node on this host (generated unit wanted $NODE_BIN)." >&2
+		echo "           Install node, or re-run setup.sh with --node <path>." >&2
+		exit 1
+	fi
+	echo "    generated unit wanted $NODE_BIN, which is not executable here"
+fi
+echo "    using \$NODE"
+
 echo "==> installing systemd unit"
 install -m 600 "\$SRC/$SERVICE_NAME.service" "/etc/systemd/system/$SERVICE_NAME.service"
+# Rewrite in place, after install, so the secret never lands in a temp file.
+sed -i "s|^ExecStart=.*|ExecStart=\$NODE $INSTALL_DIR/breakout-cors-proxy.js|" \\
+    "/etc/systemd/system/$SERVICE_NAME.service"
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
 # restart, not "enable --now": on an already-running service --now does
@@ -247,14 +274,20 @@ systemctl restart "$SERVICE_NAME"
 systemctl --no-pager status "$SERVICE_NAME" || true
 
 echo "==> confirming it is on loopback only"
-ss -ltnp | grep ":$PORT" || echo "    (nothing listening on $PORT yet — check the journal)"
+ss -ltnp | grep ":$PORT" || echo "    (nothing listening on $PORT yet)"
 
 echo "==> confirming the running process picked up this unit's environment"
-sleep 1
-curl -s "http://127.0.0.1:$PORT/" \\
-  | grep -q '"instance":"$DOMAIN"' \\
-  && echo "    ok: reports instance $DOMAIN" \\
-  || echo "    WARNING: / does not report instance $DOMAIN — the old process may still be running"
+sleep 2
+INSTALL_OK=1
+if curl -s "http://127.0.0.1:$PORT/" | grep -q '"instance":"$DOMAIN"'; then
+	echo "    ok: reports instance $DOMAIN"
+else
+	INSTALL_OK=0
+	echo "    FAILED: / does not report instance $DOMAIN" >&2
+	echo "    ---- last 20 journal lines ----" >&2
+	journalctl -u "$SERVICE_NAME" -n 20 --no-pager >&2 || true
+	echo "    -------------------------------" >&2
+fi
 EOF
 
 	# --- Apache branch, emitted only if apache configs were generated ---
@@ -330,8 +363,15 @@ EOF
 	cat <<EOF
 
 echo
-echo "Done. Smoke test:"
-echo "    curl -s https://$DOMAIN/ | jq '{version, instance, peers, site_name}'"
+if [ "\$INSTALL_OK" = 1 ]; then
+	echo "Done. Smoke test:"
+	echo "    curl -s https://$DOMAIN/ | jq '{version, instance, peers, site_name}'"
+else
+	echo "FINISHED WITH ERRORS: the proxy is not answering on 127.0.0.1:$PORT." >&2
+	echo "The reverse proxy above may be configured correctly, but there is" >&2
+	echo "nothing behind it. See the journal lines printed above." >&2
+	exit 1
+fi
 EOF
 } > "$OUT/install.sh"
 chmod 755 "$OUT/install.sh"
