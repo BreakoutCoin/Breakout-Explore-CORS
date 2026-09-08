@@ -62,7 +62,7 @@ reachable surface is Apache on 80/443.
 | `README.md` | repo | Reference for endpoints, the auth handshake, config vars, and security notes. |
 | `AGENT-API.md` | repo | Condensed endpoint/error reference written for API clients and agents. |
 | `SETUP_GUIDE.md` | repo | This document. |
-| `setup.sh` | repo | Fills the templates for one instance and writes `generated/$DOMAIN/`. Generates only — installs nothing. |
+| `setup.sh` | repo | Fills the templates for one instance and writes `generated/install-$DOMAIN/`. Generates only — installs nothing. |
 | `templates/` | repo | The unit and vhost templates, with `@PLACEHOLDER@` slots. Edit these, not the generated output. |
 | `generated/` | repo (gitignored) | setup.sh output. **Contains a live `AUTH_SECRET`** — never commit or publish it. |
 
@@ -81,12 +81,29 @@ HD-account and the address commands — errors with
 ./setup.sh --domain "$DOMAIN"
 ```
 
-This writes `generated/$DOMAIN/` containing the systemd unit (with a freshly
-generated `AUTH_SECRET`), the Apache and Caddy configs, a copy of
+This writes `generated/install-$DOMAIN/` containing the systemd unit (with a
+freshly generated `AUTH_SECRET`), the Apache and Caddy configs, a copy of
 `breakout-cors-proxy.js`, and an `install.sh`. Nothing is installed and no
 service is touched — review the output first. The directory is self-contained,
-so you can `scp -r generated/$DOMAIN/ server:` and run `sudo ./install.sh`
-there.
+so you can `scp -r generated/install-$DOMAIN/ server:` and run
+`sudo ./install.sh` there.
+
+`install.sh` adapts to the target host rather than to the machine that
+generated it:
+
+- It picks the reverse proxy by what is actually installed — `a2enmod` present
+  means Apache, otherwise `caddy`, otherwise it prints what to do by hand. Our
+  two hosts differ (`explore.brk.zone` runs Apache, `api.brk.zone` runs Caddy)
+  and the default `--tls both` covers either.
+- It **restarts** the service rather than `enable --now`, which is a no-op on
+  an already-running unit and would silently leave a changed `Environment=`
+  unapplied.
+- It never overwrites an existing Apache vhost or a populated
+  `/etc/caddy/Caddyfile` — both may already serve other sites, or carry a
+  post-certbot redirect you switched on by hand. It reports what to merge
+  instead.
+- It finishes by checking that `GET /` reports the expected `instance`, so a
+  unit whose environment did not take effect is caught at install time.
 
 `./setup.sh --help` lists every option (`--port`, `--user`, `--install-dir`,
 `--rpc-conf`, `--node`, `--tls apache|caddy|both`, and the failover options in
@@ -325,7 +342,8 @@ SECRET=$(openssl rand -hex 32)
            --peers explore.brk.zone --auth-secret "$SECRET"
 ```
 
-Then deploy each `generated/<host>/` to its server as in sections 3 and 4.
+Then deploy each `generated/install-<host>/` to its server as in sections 3
+and 4.
 
 **Why the three flags matter.**
 

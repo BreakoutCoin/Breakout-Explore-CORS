@@ -135,9 +135,11 @@ the reverse-proxy vhost, both of which `setup.sh` generates from
 ./setup.sh --domain explore.brk.zone
 ```
 
-That writes `generated/explore.brk.zone/` containing the unit, the Apache and
-Caddy configs, a copy of the proxy, and an `install.sh` to run as root on the
-server. It generates only — nothing is installed and no service is touched.
+That writes `generated/install-explore.brk.zone/` containing the unit, the
+Apache and Caddy configs, a copy of the proxy, and an `install.sh` to run as
+root on the server. It generates only — nothing is installed and no service is
+touched. `install.sh` detects whether the target runs Apache or Caddy and
+configures whichever it finds, so the same output works on either.
 `./setup.sh --help` lists every option; [SETUP_GUIDE.md](SETUP_GUIDE.md) walks
 through a full deployment.
 

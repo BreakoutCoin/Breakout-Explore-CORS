@@ -69,7 +69,7 @@ Placement:
 
 Output:
   --tls apache|caddy|both   Which reverse-proxy configs to emit. Default: both
-  --out <dir>            Output directory. Default: ./generated/<domain>
+  --out <dir>            Output directory. Default: ./generated/install-<domain>
   --force                Overwrite an existing output directory
   -h, --help             This message
 
@@ -147,7 +147,7 @@ esac
 [ -n "$RPC_CONF" ]     || RPC_CONF="/home/$RUN_USER/.breakout/breakout.conf"
 [ -n "$SITE_NAME" ]    || SITE_NAME="$DOMAIN"
 [ -n "$SERVICE_NAME" ] || SERVICE_NAME="breakout-proxy"
-[ -n "$OUT" ]          || OUT="$SELF_DIR/generated/$DOMAIN"
+[ -n "$OUT" ]          || OUT="$SELF_DIR/generated/install-$DOMAIN"
 
 if [ -z "$NODE_BIN" ]; then
 	NODE_BIN=$(command -v node 2>/dev/null || true)
@@ -218,6 +218,11 @@ if [ "$TLS" = caddy ] || [ "$TLS" = both ]; then
 fi
 
 # ---- generated installer -------------------------------------------------
+#
+# The installer detects the reverse proxy actually present on the box rather
+# than assuming the one this machine happens to run. A host fronted by Caddy
+# has no a2enmod, and vice versa; --tls both emits configs for either and lets
+# the target decide.
 
 {
 	cat <<EOF
@@ -235,25 +240,44 @@ install -o "$RUN_USER" -g "$RUN_USER" -m 644 \\
 echo "==> installing systemd unit"
 install -m 600 "\$SRC/$SERVICE_NAME.service" "/etc/systemd/system/$SERVICE_NAME.service"
 systemctl daemon-reload
-systemctl enable --now "$SERVICE_NAME"
+systemctl enable "$SERVICE_NAME"
+# restart, not "enable --now": on an already-running service --now does
+# nothing, so a changed Environment= would silently not take effect.
+systemctl restart "$SERVICE_NAME"
 systemctl --no-pager status "$SERVICE_NAME" || true
 
 echo "==> confirming it is on loopback only"
 ss -ltnp | grep ":$PORT" || echo "    (nothing listening on $PORT yet — check the journal)"
+
+echo "==> confirming the running process picked up this unit's environment"
+sleep 1
+curl -s "http://127.0.0.1:$PORT/" \\
+  | grep -q '"instance":"$DOMAIN"' \\
+  && echo "    ok: reports instance $DOMAIN" \\
+  || echo "    WARNING: / does not report instance $DOMAIN — the old process may still be running"
 EOF
 
+	# --- Apache branch, emitted only if apache configs were generated ---
 	if [ "$TLS" = apache ] || [ "$TLS" = both ]; then
 		cat <<EOF
 
-echo "==> Apache vhosts"
-a2enmod proxy proxy_http rewrite
-install -m 644 "\$SRC/$DOMAIN.conf" "/etc/apache2/sites-available/$DOMAIN.conf"
-a2ensite "$DOMAIN"
-apache2ctl configtest && systemctl reload apache2
+if command -v a2enmod >/dev/null 2>&1; then
+	echo "==> Apache detected: installing vhost"
+	a2enmod proxy proxy_http rewrite
+	if [ -e "/etc/apache2/sites-available/$DOMAIN.conf" ]; then
+		echo "    /etc/apache2/sites-available/$DOMAIN.conf already exists — leaving it alone."
+		echo "    Compare against \$SRC/$DOMAIN.conf yourself; overwriting would revert"
+		echo "    any post-certbot redirect you have already switched on."
+	else
+		install -m 644 "\$SRC/$DOMAIN.conf" "/etc/apache2/sites-available/$DOMAIN.conf"
+		a2ensite "$DOMAIN"
+	fi
+	apache2ctl configtest && systemctl reload apache2
 
-cat <<'NOTE'
+	cat <<'NOTE'
 
-    Next: obtain the certificate, which writes the :443 vhost itself —
+    If this host has no certificate yet, obtain one — certbot writes the
+    :443 vhost itself:
 
         apt install -y certbot python3-certbot-apache
         certbot --apache -d $DOMAIN
@@ -266,20 +290,48 @@ cat <<'NOTE'
     normally manages that file — do not overwrite certbot's copy with it.
 NOTE
 EOF
+		if [ "$TLS" != both ]; then cat <<EOF
+else
+	echo "==> Apache not found on this host (no a2enmod)."
+	echo "    Regenerate with --tls caddy, or configure your reverse proxy by hand"
+	echo "    to forward to 127.0.0.1:$PORT — and do not add CORS headers there,"
+	echo "    the proxy sets them itself."
+fi
+EOF
+		fi
 	fi
 
+	# --- Caddy branch ---------------------------------------------------
 	if [ "$TLS" = caddy ] || [ "$TLS" = both ]; then
+		if [ "$TLS" = both ]; then printf 'elif'; else printf '\nif'; fi
 		cat <<EOF
-
-echo "==> Caddy (skip if you are using Apache)"
-echo "    install -m 644 \$SRC/Caddyfile /etc/caddy/Caddyfile && systemctl restart caddy"
+ command -v caddy >/dev/null 2>&1; then
+	echo "==> Caddy detected"
+	if [ ! -e /etc/caddy/Caddyfile ]; then
+		install -m 644 "\$SRC/Caddyfile" /etc/caddy/Caddyfile
+		systemctl restart caddy
+		echo "    installed /etc/caddy/Caddyfile and restarted caddy"
+	elif grep -q "^[[:space:]]*$DOMAIN[[:space:]]*{" /etc/caddy/Caddyfile; then
+		echo "    /etc/caddy/Caddyfile already has a block for $DOMAIN — nothing to do."
+	else
+		echo "    /etc/caddy/Caddyfile exists and may serve other sites, so it was NOT"
+		echo "    modified. Append this block yourself, then: systemctl reload caddy"
+		echo
+		sed 's/^/        /' "\$SRC/Caddyfile"
+	fi
+else
+	echo "==> No supported reverse proxy found (looked for a2enmod and caddy)."
+	echo "    Point your own front end at 127.0.0.1:$PORT — and do not add CORS"
+	echo "    headers there, the proxy sets them itself."
+fi
 EOF
 	fi
 
 	cat <<EOF
 
 echo
-echo "Done. Smoke test:  curl https://$DOMAIN/"
+echo "Done. Smoke test:"
+echo "    curl -s https://$DOMAIN/ | jq '{version, instance, peers, site_name}'"
 EOF
 } > "$OUT/install.sh"
 chmod 755 "$OUT/install.sh"
