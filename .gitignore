@@ -23,6 +23,12 @@ npm-debug.log*
 # setup.sh output — populated unit files containing a live AUTH_SECRET
 generated/
 
+# site configs hold the site's AUTH_SECRET; they belong outside the repo, but
+# never publish one that lands here by accident
+site-configs/
+*-site.conf
+*.site.conf
+
 # never commit real credentials or a populated unit file
 breakout.conf
 *.pem

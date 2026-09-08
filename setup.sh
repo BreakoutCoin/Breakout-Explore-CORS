@@ -9,53 +9,49 @@
 # used. Review the output, then run the generated install.sh.
 #
 # Two instances (e.g. a primary and a live backup a wallet can fail over to)
-# are just two runs of this script with different --domain values and the SAME
-# --auth-secret and --site-name, so a token minted by one is accepted by the
-# other. See SETUP_GUIDE.md section 6.
+# are two runs of this script with different --domain values against the SAME
+# --site-config, which is what keeps their signing realm and AUTH_SECRET in
+# step so a token minted by one is accepted by the other.
+# See SETUP_GUIDE.md section 6.
 
 set -eu
 
-die() { printf 'setup.sh: %s\n' "$*" >&2; exit 1; }
+die()  { printf 'setup.sh: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'setup.sh: warning: %s\n' "$*" >&2; }
 
 SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TEMPLATES="$SELF_DIR/templates"
 
 # ---- defaults ------------------------------------------------------------
+#
+# Three tiers, highest wins: command line, then the site config, then the
+# defaults set here. Site-wide identity (site, auth-secret, peers) has no
+# command-line form at all — see read_site_config below for why.
 
 DOMAIN=""
-PORT=3333
-RUN_USER=$(id -un)
-INSTALL_DIR=""
-RPC_CONF=""
-RPC_URL="http://127.0.0.1:50542"
-SITE_NAME=""
-PEERS=""
-AUTH_SECRET=""
-NODE_BIN=""
-OUT=""
-TLS="both"
-SERVICE_NAME=""
+SITE_CONFIG=""
 FORCE=0
+
+# Values from the command line. Empty means "not given", so the config can
+# still supply it.
+CLI_PORT=""; CLI_USER=""; CLI_INSTALL_DIR=""; CLI_RPC_CONF=""; CLI_RPC_URL=""
+CLI_NODE=""; CLI_TLS=""; CLI_SERVICE_NAME=""; CLI_OUT=""
+
+# Values from the site config.
+CFG_SITE=""; CFG_AUTH_SECRET=""; CFG_PEERS=""
+CFG_PORT=""; CFG_USER=""; CFG_INSTALL_DIR=""; CFG_RPC_CONF=""; CFG_RPC_URL=""
+CFG_NODE=""; CFG_TLS=""; CFG_SERVICE_NAME=""
 
 usage() {
 	cat <<'EOF'
-Usage: ./setup.sh --domain <fqdn> [options]
+Usage: ./setup.sh --domain <fqdn> --site-config <file> [options]
 
 Required:
-  --domain <fqdn>        Public hostname for this instance (e.g. explore.brk.zone)
+  --domain <fqdn>        Public hostname for THIS instance (e.g. explore.brk.zone)
+  --site-config <file>   The site's shared config. Not public — it holds the
+                         AUTH_SECRET. See "Site config" below.
 
-Identity / failover:
-  --site-name <name>     Realm shown to users signing an auth challenge.
-                         Default: the domain. Instances sharing an AUTH_SECRET
-                         MUST share this value.
-  --peers <a,b,c>        Comma-separated hostnames of equivalent instances,
-                         advertised by the index at "/" so wallets can offer
-                         them as failover choices.
-  --auth-secret <hex>    HMAC key for auth tokens. Default: freshly generated.
-                         Pass the SAME value to every instance in a failover
-                         pair, or tokens will not carry across.
-
-Placement:
+Placement (each may also be set in the site config; the command line wins):
   --user <name>          System user the service runs as. Default: current user.
   --install-dir <path>   Where breakout-cors-proxy.js lives on the server.
                          Default: /home/<user>/breakout-proxy
@@ -68,20 +64,44 @@ Placement:
   --port <n>             Loopback port for this instance. Default: 3333
   --service-name <name>  systemd unit name, no .service suffix.
                          Default: breakout-proxy
+  --tls apache|caddy|both   Which reverse-proxy configs to emit. Default: both
 
 Output:
-  --tls apache|caddy|both   Which reverse-proxy configs to emit. Default: both
   --out <dir>            Output directory. Default: ./generated/install-<domain>
   --force                Overwrite an existing output directory
   -h, --help             This message
 
-Example — a primary and its live backup, sharing tokens:
+Site config
+-----------
+Every instance of one site must present the SAME signing realm and the SAME
+AUTH_SECRET, or a token minted on one is rejected by the others and a wallet
+failing over has to re-authenticate. Those values are therefore not command-
+line flags — passing them per-invocation is exactly how a pair drifts apart.
+They live in one file, shared by every domain of the site:
 
-  SECRET=$(openssl rand -hex 32)
-  ./setup.sh --domain explore.brk.zone --site-name brk.zone \
-             --peers api.brk.zone --auth-secret "$SECRET"
-  ./setup.sh --domain api.brk.zone     --site-name brk.zone \
-             --peers explore.brk.zone --auth-secret "$SECRET"
+    site        = brk.zone                          (required)
+    auth-secret = <openssl rand -hex 32>            (required)
+    peers       = explore.brk.zone,api.brk.zone     (optional)
+
+    # optional placement defaults, overridden by the command line
+    tls          = both
+    user         = jstroud
+    install-dir  = /home/jstroud/breakout-proxy
+    rpc-conf     = /home/jstroud/.breakout/breakout.conf
+    rpc-url      = http://127.0.0.1:50542
+    node         = /usr/bin/node
+    port         = 3333
+    service-name = breakout-proxy
+
+"peers" lists every domain of the site, including this one; --domain is pruned
+from it automatically, so one file serves every instance unchanged. "domain"
+is NOT accepted in the config — it is what distinguishes one instance from
+another. Keep the file out of any repository and chmod 600 it.
+
+Example — a site of two hosts, from one config:
+
+  ./setup.sh --domain explore.brk.zone --site-config ../site-configs/brk.zone-site.conf --tls apache
+  ./setup.sh --domain api.brk.zone     --site-config ../site-configs/brk.zone-site.conf --tls caddy
 EOF
 }
 
@@ -90,28 +110,114 @@ EOF
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--domain)       [ $# -ge 2 ] || die "--domain needs a value";       DOMAIN=$2; shift 2 ;;
-		--port)         [ $# -ge 2 ] || die "--port needs a value";         PORT=$2; shift 2 ;;
-		--user)         [ $# -ge 2 ] || die "--user needs a value";         RUN_USER=$2; shift 2 ;;
-		--install-dir)  [ $# -ge 2 ] || die "--install-dir needs a value";  INSTALL_DIR=$2; shift 2 ;;
-		--rpc-conf)     [ $# -ge 2 ] || die "--rpc-conf needs a value";     RPC_CONF=$2; shift 2 ;;
-		--rpc-url)      [ $# -ge 2 ] || die "--rpc-url needs a value";      RPC_URL=$2; shift 2 ;;
-		--site-name)    [ $# -ge 2 ] || die "--site-name needs a value";    SITE_NAME=$2; shift 2 ;;
-		--peers)        [ $# -ge 2 ] || die "--peers needs a value";        PEERS=$2; shift 2 ;;
-		--auth-secret)  [ $# -ge 2 ] || die "--auth-secret needs a value";  AUTH_SECRET=$2; shift 2 ;;
-		--node)         [ $# -ge 2 ] || die "--node needs a value";         NODE_BIN=$2; shift 2 ;;
-		--out)          [ $# -ge 2 ] || die "--out needs a value";          OUT=$2; shift 2 ;;
-		--tls)          [ $# -ge 2 ] || die "--tls needs a value";          TLS=$2; shift 2 ;;
-		--service-name) [ $# -ge 2 ] || die "--service-name needs a value"; SERVICE_NAME=$2; shift 2 ;;
+		--site-config)  [ $# -ge 2 ] || die "--site-config needs a value";  SITE_CONFIG=$2; shift 2 ;;
+		--port)         [ $# -ge 2 ] || die "--port needs a value";         CLI_PORT=$2; shift 2 ;;
+		--user)         [ $# -ge 2 ] || die "--user needs a value";         CLI_USER=$2; shift 2 ;;
+		--install-dir)  [ $# -ge 2 ] || die "--install-dir needs a value";  CLI_INSTALL_DIR=$2; shift 2 ;;
+		--rpc-conf)     [ $# -ge 2 ] || die "--rpc-conf needs a value";     CLI_RPC_CONF=$2; shift 2 ;;
+		--rpc-url)      [ $# -ge 2 ] || die "--rpc-url needs a value";      CLI_RPC_URL=$2; shift 2 ;;
+		--node)         [ $# -ge 2 ] || die "--node needs a value";         CLI_NODE=$2; shift 2 ;;
+		--out)          [ $# -ge 2 ] || die "--out needs a value";          CLI_OUT=$2; shift 2 ;;
+		--tls)          [ $# -ge 2 ] || die "--tls needs a value";          CLI_TLS=$2; shift 2 ;;
+		--service-name) [ $# -ge 2 ] || die "--service-name needs a value"; CLI_SERVICE_NAME=$2; shift 2 ;;
 		--force)        FORCE=1; shift ;;
 		-h|--help)      usage; exit 0 ;;
+		--site-name|--auth-secret|--peers)
+			case "$1" in
+				--site-name) _k=site ;;
+				*)           _k=${1#--} ;;
+			esac
+			die "$1 was replaced by --site-config; put \"$_k\" in that file.
+       Per-invocation identity is how a failover pair drifts apart, which is
+       the whole reason these moved. See --help." ;;
 		*)              usage >&2; die "unknown argument: $1" ;;
 	esac
 done
 
-# ---- validation ----------------------------------------------------------
+[ -n "$DOMAIN" ]      || { usage >&2; die "--domain is required"; }
+[ -n "$SITE_CONFIG" ] || { usage >&2; die "--site-config is required"; }
+[ -d "$TEMPLATES" ]   || die "templates/ not found next to setup.sh (looked in $TEMPLATES)"
 
-[ -n "$DOMAIN" ] || { usage >&2; die "--domain is required"; }
-[ -d "$TEMPLATES" ] || die "templates/ not found next to setup.sh (looked in $TEMPLATES)"
+# ---- site config ---------------------------------------------------------
+
+trim() {
+	v=$1
+	v=${v#"${v%%[![:space:]]*}"}
+	v=${v%"${v##*[![:space:]]}"}
+	printf '%s' "$v"
+}
+
+read_site_config() {
+	conf=$1
+	[ -f "$conf" ] || die "site config not found: $conf"
+	[ -r "$conf" ] || die "site config not readable: $conf"
+
+	# It holds the AUTH_SECRET; anything readable beyond the owner is a leak
+	# waiting to happen. Warn rather than refuse — the file may be on a
+	# single-user box and this is not our call to enforce.
+	case "$(ls -ld "$conf" | cut -c5-10)" in
+		*[rwx]*) warn "$conf is readable beyond its owner; it holds the AUTH_SECRET.
+              chmod 600 \"$conf\"" ;;
+	esac
+
+	lineno=0
+	while IFS= read -r line || [ -n "$line" ]; do
+		lineno=$((lineno + 1))
+		t=$(trim "$line")
+		[ -z "$t" ] && continue
+		case "$t" in \#*) continue ;; esac
+		case "$t" in *=*) ;; *) die "$conf:$lineno: expected \"key = value\", got: $t" ;; esac
+		k=$(trim "${t%%=*}")
+		v=$(trim "${t#*=}")
+		case "$k" in
+			site)         CFG_SITE=$v ;;
+			auth-secret)  CFG_AUTH_SECRET=$v ;;
+			peers)        CFG_PEERS=$v ;;
+			tls)          CFG_TLS=$v ;;
+			user)         CFG_USER=$v ;;
+			install-dir)  CFG_INSTALL_DIR=$v ;;
+			rpc-conf)     CFG_RPC_CONF=$v ;;
+			rpc-url)      CFG_RPC_URL=$v ;;
+			node)         CFG_NODE=$v ;;
+			port)         CFG_PORT=$v ;;
+			service-name) CFG_SERVICE_NAME=$v ;;
+			domain)
+				die "$conf:$lineno: \"domain\" is not allowed in a site config.
+       The config is shared by every domain of the site; the domain is what
+       distinguishes one instance from another. Pass it as --domain." ;;
+			*)  die "$conf:$lineno: unknown key \"$k\"" ;;
+		esac
+	done < "$conf"
+
+	[ -n "$CFG_SITE" ] || die "$conf: \"site\" is required (the signing realm shared by every instance)"
+	if [ -z "$CFG_AUTH_SECRET" ]; then
+		die "$conf: \"auth-secret\" is required.
+       It has no command-line form on purpose: every instance of a site must
+       use the same value. Generate one once and keep it in this file:
+           printf 'auth-secret = %s\\n' \"\$(openssl rand -hex 32)\" >> \"$conf\""
+	fi
+}
+
+read_site_config "$SITE_CONFIG"
+
+# ---- merge: command line > site config > default -------------------------
+
+pick() { [ -n "$1" ] && printf '%s' "$1" || printf '%s' "$2"; }
+
+PORT=$(pick "$CLI_PORT"                 "$(pick "$CFG_PORT" 3333)")
+RUN_USER=$(pick "$CLI_USER"             "$(pick "$CFG_USER" "$(id -un)")")
+RPC_URL=$(pick "$CLI_RPC_URL"           "$(pick "$CFG_RPC_URL" http://127.0.0.1:50542)")
+TLS=$(pick "$CLI_TLS"                   "$(pick "$CFG_TLS" both)")
+SERVICE_NAME=$(pick "$CLI_SERVICE_NAME" "$(pick "$CFG_SERVICE_NAME" breakout-proxy)")
+INSTALL_DIR=$(pick "$CLI_INSTALL_DIR"   "$CFG_INSTALL_DIR")
+RPC_CONF=$(pick "$CLI_RPC_CONF"         "$CFG_RPC_CONF")
+NODE_BIN=$(pick "$CLI_NODE"             "$CFG_NODE")
+OUT=$CLI_OUT
+
+SITE_NAME=$CFG_SITE
+AUTH_SECRET=$CFG_AUTH_SECRET
+
+# ---- validation ----------------------------------------------------------
 
 # Values are substituted with sed using | as the delimiter, and land in a
 # systemd unit where a newline would silently truncate the directive. Reject
@@ -129,26 +235,56 @@ case "$DOMAIN" in
 	*[!A-Za-z0-9.-]*) die "--domain must be a hostname: letters, digits, dots, hyphens" ;;
 esac
 case "$PORT" in
-	''|*[!0-9]*) die "--port must be numeric" ;;
+	''|*[!0-9]*) die "port must be numeric" ;;
 esac
-[ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "--port must be 1-65535"
+[ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "port must be 1-65535"
 case "$RUN_USER" in
-	*[!A-Za-z0-9._-]*) die "--user is not a valid username" ;;
+	*[!A-Za-z0-9._-]*) die "user is not a valid username" ;;
 esac
 case "$TLS" in
 	apache|caddy|both) ;;
-	*) die "--tls must be apache, caddy or both" ;;
+	*) die "tls must be apache, caddy or both (got \"$TLS\")" ;;
 esac
-case "$PEERS" in
-	*[!A-Za-z0-9.,-]*) die "--peers must be a comma-separated hostname list" ;;
+case "$SITE_NAME" in
+	*[!A-Za-z0-9.-]*) die "site must be a hostname-like realm: letters, digits, dots, hyphens" ;;
 esac
+case "$CFG_PEERS" in
+	*[!A-Za-z0-9.,-]*) die "peers must be a comma-separated hostname list" ;;
+esac
+case "$AUTH_SECRET" in
+	*[!0-9a-fA-F]*) die "auth-secret must be hex (openssl rand -hex 32)" ;;
+esac
+[ "${#AUTH_SECRET}" -ge 32 ] || die "auth-secret is too short; use at least 32 hex chars"
+
+# ---- peers: drop this domain, dedupe -------------------------------------
+
+PEERS=""
+saveIFS=$IFS
+IFS=','
+for p in $CFG_PEERS; do
+	p=$(trim "$p")
+	[ -z "$p" ] && continue
+	[ "$p" = "$DOMAIN" ] && continue
+	case ",$PEERS," in *",$p,"*) continue ;; esac
+	PEERS="${PEERS:+$PEERS,}$p"
+done
+IFS=$saveIFS
+
+# A peer that does not resolve is a dead failover target advertised to every
+# wallet. Advisory only: DNS may be unavailable, or the host not yet created.
+if command -v host >/dev/null 2>&1; then
+	saveIFS=$IFS
+	IFS=','
+	for p in $PEERS $DOMAIN; do
+		host -W 2 "$p" >/dev/null 2>&1 || warn "\"$p\" does not resolve — check the site config for a typo"
+	done
+	IFS=$saveIFS
+fi
 
 # ---- derived defaults ----------------------------------------------------
 
 [ -n "$INSTALL_DIR" ]  || INSTALL_DIR="/home/$RUN_USER/breakout-proxy"
 [ -n "$RPC_CONF" ]     || RPC_CONF="/home/$RUN_USER/.breakout/breakout.conf"
-[ -n "$SITE_NAME" ]    || SITE_NAME="$DOMAIN"
-[ -n "$SERVICE_NAME" ] || SERVICE_NAME="breakout-proxy"
 [ -n "$OUT" ]          || OUT="$SELF_DIR/generated/install-$DOMAIN"
 
 if [ -z "$NODE_BIN" ]; then
@@ -156,25 +292,9 @@ if [ -z "$NODE_BIN" ]; then
 	[ -n "$NODE_BIN" ] || NODE_BIN=/usr/bin/node
 fi
 
-GENERATED_SECRET=0
-if [ -z "$AUTH_SECRET" ]; then
-	if command -v openssl >/dev/null 2>&1; then
-		AUTH_SECRET=$(openssl rand -hex 32)
-	elif [ -r /dev/urandom ]; then
-		AUTH_SECRET=$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')
-	else
-		die "cannot generate an AUTH_SECRET: no openssl and no /dev/urandom. Pass --auth-secret."
-	fi
-	GENERATED_SECRET=1
-fi
-case "$AUTH_SECRET" in
-	*[!0-9a-fA-F]*) die "--auth-secret must be hex (openssl rand -hex 32)" ;;
-esac
-[ "${#AUTH_SECRET}" -ge 32 ] || die "--auth-secret is too short; use at least 32 hex chars"
-
 for pair in "install-dir:$INSTALL_DIR" "rpc-conf:$RPC_CONF" "rpc-url:$RPC_URL" \
-            "site-name:$SITE_NAME" "node:$NODE_BIN" "service-name:$SERVICE_NAME"; do
-	check_clean "--${pair%%:*}" "${pair#*:}"
+            "site:$SITE_NAME" "node:$NODE_BIN" "service-name:$SERVICE_NAME"; do
+	check_clean "${pair%%:*}" "${pair#*:}"
 done
 
 # ---- output directory ----------------------------------------------------
@@ -393,6 +513,16 @@ chmod 755 "$OUT/install.sh"
 
 # ---- summary -------------------------------------------------------------
 
+# A short hash of the AUTH_SECRET, so two runs can be eyeballed as matching
+# without ever printing the secret itself.
+AUTH_SECRET_FP=$(
+	printf '%s' "$AUTH_SECRET" | {
+		if command -v shasum >/dev/null 2>&1; then shasum -a 256
+		elif command -v sha256sum >/dev/null 2>&1; then sha256sum
+		else echo "unavailable"; fi
+	} | cut -c1-12
+)
+
 cat <<EOF
 
 Generated for $DOMAIN in:
@@ -415,33 +545,25 @@ fi
 cat <<EOF
   install.sh              review, then run as root on the server
 
+From the site config ($SITE_CONFIG):
+  signing realm  $SITE_NAME
+  peers          ${PEERS:-(none)}
+  auth-secret    ${AUTH_SECRET_FP} (fingerprint — every instance of this site
+                 must show the same one)
+
 Settings:
   port           127.0.0.1:$PORT
   user           $RUN_USER
   install dir    $INSTALL_DIR
   rpc conf       $RPC_CONF
   rpc url        $RPC_URL
-  signing realm  $SITE_NAME
-  peers          ${PEERS:-(none)}
   node           $NODE_BIN
+  tls            $TLS
 EOF
-
-if [ "$GENERATED_SECRET" -eq 1 ]; then
-	cat <<EOF
-
-NOTE: a fresh AUTH_SECRET was generated for this instance. If this proxy is
-      part of a failover pair, pass the SAME secret to the other instance:
-
-        ./setup.sh --domain <other-host> --site-name $SITE_NAME \\
-                   --auth-secret $AUTH_SECRET
-
-      Otherwise a token minted here will be rejected there and wallets will
-      have to re-authenticate after failing over.
-EOF
-fi
 
 cat <<EOF
 
 The output directory contains a live secret. It is covered by .gitignore —
-do not commit it or copy it anywhere public.
+do not commit it or copy it anywhere public. The same goes for
+$SITE_CONFIG.
 EOF

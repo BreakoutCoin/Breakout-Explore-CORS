@@ -132,7 +132,7 @@ the reverse-proxy vhost, both of which `setup.sh` generates from
 [`templates/`](templates/):
 
 ```bash
-./setup.sh --domain explore.brk.zone
+./setup.sh --domain explore.brk.zone --site-config ../site-configs/brk.zone-site.conf
 ```
 
 That writes `generated/install-explore.brk.zone/` containing the unit, the
@@ -146,16 +146,36 @@ through a full deployment.
 ## Running more than one instance
 
 Wallets can be pointed at a second, interchangeable instance when the first is
-unreachable. Generate each with the **same** `--auth-secret` and `--site-name`,
-and tell each about the other:
+unreachable.
+
+Every instance of a site must present the same signing realm and the same
+`AUTH_SECRET`. Those are not command-line flags — passing them per invocation
+is precisely how a pair drifts apart — so they live in one **site config**,
+shared by every domain of the site and kept outside the repository:
+
+```ini
+# ../site-configs/brk.zone-site.conf   —   chmod 600, never committed
+site        = brk.zone
+auth-secret = 9f3c…                      # openssl rand -hex 32, once, forever
+peers       = explore.brk.zone,api.brk.zone
+
+# optional shared placement defaults, overridden by the command line
+user     = jstroud
+rpc-conf = /home/jstroud/.breakout/breakout.conf
+```
+
+`peers` lists every domain of the site including the one being generated;
+`--domain` is pruned from it automatically, so the same file serves each
+instance unchanged:
 
 ```bash
-SECRET=$(openssl rand -hex 32)
-./setup.sh --domain explore.brk.zone --site-name brk.zone \
-           --peers api.brk.zone --auth-secret "$SECRET"
-./setup.sh --domain api.brk.zone --site-name brk.zone \
-           --peers explore.brk.zone --auth-secret "$SECRET"
+./setup.sh --domain explore.brk.zone --site-config ../site-configs/brk.zone-site.conf --tls apache
+./setup.sh --domain api.brk.zone     --site-config ../site-configs/brk.zone-site.conf --tls caddy
 ```
+
+Both runs print a short fingerprint of the secret. If the two fingerprints
+match, the instances will accept each other's tokens; the secret itself is
+never printed.
 
 Each instance then advertises its version, itself and its peers at `GET /`:
 

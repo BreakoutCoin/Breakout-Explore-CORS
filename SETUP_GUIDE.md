@@ -347,34 +347,63 @@ down, the wallet is down. Running a second, interchangeable instance on a
 different hostname lets a wallet offer the alternative in a pulldown and keep
 working. Our pair is `explore.brk.zone` (primary) and `api.brk.zone` (backup).
 
-They are the same code with different unit files. Generate both from one
-secret:
+### The site config
 
-```bash
-SECRET=$(openssl rand -hex 32)
+Three values must be identical on every instance, and stay that way for as
+long as the site exists:
 
-./setup.sh --domain explore.brk.zone --site-name brk.zone \
-           --peers api.brk.zone --auth-secret "$SECRET"
+- **`auth-secret`** — a token minted by one instance is accepted by the other
+  only if they share this. Diverge, and a wallet that fails over mid-session
+  gets a `401` and must re-authenticate.
+- **`site`** — the realm named in the message a user signs. If instances
+  differ, someone failing over is asked to sign a visibly different message
+  for what is, to them, the same service; the realm is what makes the
+  signature meaningful.
+- **`peers`** — each instance advertises the others at `GET /`, so a client
+  discovers its failover options instead of shipping a hardcoded list.
 
-./setup.sh --domain api.brk.zone --site-name brk.zone \
-           --peers explore.brk.zone --auth-secret "$SECRET"
+These have **no command-line flags**. Passing them per invocation is exactly
+how a pair drifts apart — one run with a forgotten secret silently mints a
+fresh one, and half the site stops honouring the other half's tokens. They
+live in a single file, shared by every domain of the site:
+
+```ini
+# ../site-configs/brk.zone-site.conf   —   chmod 600, kept out of the repo
+site        = brk.zone
+auth-secret = 9f3c…                      # openssl rand -hex 32, once, forever
+peers       = explore.brk.zone,api.brk.zone
+
+# optional shared placement defaults; the command line overrides these
+tls      = both
+user     = jstroud
+rpc-conf = /home/jstroud/.breakout/breakout.conf
 ```
 
+`peers` lists every domain of the site **including the one being generated** —
+`--domain` is pruned automatically, so one file serves every instance
+unchanged. `domain` itself is rejected in the config: it is the one thing that
+distinguishes instances, so it stays on the command line.
+
+```bash
+./setup.sh --domain explore.brk.zone --site-config ../site-configs/brk.zone-site.conf --tls apache
+./setup.sh --domain api.brk.zone     --site-config ../site-configs/brk.zone-site.conf --tls caddy
+```
+
+Each run prints a 12-character fingerprint of the secret rather than the
+secret itself. Matching fingerprints mean the instances will honour each
+other's tokens:
+
+```
+  auth-secret    59c76e7160e0 (fingerprint — every instance of this site
+                 must show the same one)
+```
+
+setup.sh also warns when the config is readable beyond its owner, and when a
+peer hostname fails to resolve — a typo there ships a dead failover target to
+every wallet.
+
 Then deploy each `generated/install-<host>/` to its server as in sections 3
-and 4.
-
-**Why the three flags matter.**
-
-- `--auth-secret` shared → a bearer token minted by one instance is accepted by
-  the other, so a wallet that fails over mid-session does not have to
-  re-authenticate. Omit it and each instance generates its own, which is the
-  right choice only if you *want* the instances isolated.
-- `--site-name` shared → both instances name the same realm in the message a
-  user signs. If they differ, a user failing over is asked to sign a
-  visibly different message for what is, to them, the same service — and the
-  realm string is the thing that makes the signature meaningful.
-- `--peers` → each instance advertises the other at `GET /`, so a client can
-  discover its failover options instead of shipping a hardcoded list:
+and 4. Each instance advertises the others at `GET /`:
 
 ```console
 $ curl -s https://explore.brk.zone/ | jq '{version, instance, peers, site_name}'
@@ -504,5 +533,6 @@ running there".
 After changing `breakout-cors-proxy.js`, redeploy it to **every** instance —
 `scp` it to each `/home/jstroud/breakout-proxy/` and
 `sudo systemctl restart breakout-proxy` on each. A `setup.sh --force` re-run
-regenerates a host's files, but note it mints a **new** `AUTH_SECRET` unless
-you pass `--auth-secret`, which would desynchronize a failover pair.
+regenerates a host's files from the site config, so the `AUTH_SECRET` stays
+whatever that file says — there is no longer a way to mint a fresh one by
+forgetting a flag.
