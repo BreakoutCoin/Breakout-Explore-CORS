@@ -273,11 +273,20 @@ systemctl enable "$SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
 systemctl --no-pager status "$SERVICE_NAME" || true
 
+echo "==> waiting for the proxy to answer"
+# systemctl restart returns as soon as the process is forked, so both checks
+# below race node's startup unless we wait for it to actually bind.
+i=0
+while [ \$i -lt 15 ]; do
+	curl -sf "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break
+	i=\$((i + 1))
+	sleep 1
+done
+
 echo "==> confirming it is on loopback only"
-ss -ltnp | grep ":$PORT" || echo "    (nothing listening on $PORT yet)"
+ss -ltnp | grep ":$PORT" || echo "    (nothing listening on $PORT)"
 
 echo "==> confirming the running process picked up this unit's environment"
-sleep 2
 INSTALL_OK=1
 if curl -s "http://127.0.0.1:$PORT/" | grep -q '"instance":"$DOMAIN"'; then
 	echo "    ok: reports instance $DOMAIN"
@@ -365,7 +374,13 @@ EOF
 echo
 if [ "\$INSTALL_OK" = 1 ]; then
 	echo "Done. Smoke test:"
-	echo "    curl -s https://$DOMAIN/ | jq '{version, instance, peers, site_name}'"
+	if command -v jq >/dev/null 2>&1; then
+		echo "    curl -s https://$DOMAIN/ | jq '{version, instance, peers, site_name}'"
+	else
+		echo "    curl -s https://$DOMAIN/"
+		echo "    (install jq for a readable summary:"
+		echo "     curl -s https://$DOMAIN/ | jq '{version, instance, peers, site_name}')"
+	fi
 else
 	echo "FINISHED WITH ERRORS: the proxy is not answering on 127.0.0.1:$PORT." >&2
 	echo "The reverse proxy above may be configured correctly, but there is" >&2
