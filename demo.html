@@ -31,17 +31,19 @@
 
 <div class="row">
   <label>Server</label>
-  <select id="proxy-pick" onchange="onPickServer()">
-    <option value="">— choose or type below —</option>
-  </select>
-  <button type="button" onclick="loadPeers()">Discover peers</button>
+  <select id="proxy-pick" onchange="onPickServer()"></select>
+  <button type="button" onclick="checkServer()">Check server</button>
 </div>
 <div class="row">
   <label>Proxy URL</label>
   <input id="proxy" type="text" class="wide" placeholder="https://your-proxy-host">
 </div>
-<div class="row"><small id="instanceState">Set a proxy URL, then "Discover peers" to
-  populate the list from the server's own index.</small></div>
+<div class="row"><small>Every request below goes to this URL. The two Breakout
+  servers are interchangeable — if one is down, pick the other.
+  <b>Check server</b> asks the selected one who it is: its version, its signing
+  realm, and any further servers it advertises, which get added to the list.
+  </small></div>
+<div class="row"><small id="instanceState">Not checked yet.</small></div>
 
 <!-- ============ OPEN READS — ADDRESS ============ -->
 <fieldset>
@@ -178,19 +180,26 @@ let LAST_NONCE = null;   // nonce tied to the current challenge
 
 function proxyBase() { return document.getElementById('proxy').value.replace(/\/+$/, ''); }
 
-// The servers offered in the pulldown. Seeded from ?server= / ?peers= in this
-// page's own URL so the file itself hardcodes no hostname, then extended by
-// whatever the live server reports as its peers.
+// The servers offered in the pulldown: the known Breakout deployment, plus
+// anything passed as ?server= / ?peers= in this page's own URL, plus whatever
+// a live server advertises when you press "Check server". Point this file at
+// your own deployment by editing DEFAULT_SERVERS or by loading it with
+// ?server=your-host.
+const DEFAULT_SERVERS = ['explore.brk.zone', 'api.brk.zone'];
 const SERVERS = [];
 
 function seedServers() {
   const q = new URLSearchParams(location.search);
-  const first = q.get('server');
-  if (first) document.getElementById('proxy').value = first;
-  const seed = [first].concat((q.get('peers') || '').split(','))
+  const fromUrl = (q.get('server') || '').trim();
+  const seed = DEFAULT_SERVERS
+    .concat(fromUrl)
+    .concat((q.get('peers') || '').split(','))
     .map((h) => (h || '').trim()).filter(Boolean);
   seed.forEach(addServer);
-  if (first) document.getElementById('proxy-pick').value = toUrl(first);
+
+  const chosen = toUrl(fromUrl || DEFAULT_SERVERS[0]);
+  document.getElementById('proxy').value = chosen;
+  document.getElementById('proxy-pick').value = chosen;
 }
 
 function toUrl(host) {
@@ -212,22 +221,36 @@ function onPickServer() {
   if (v) document.getElementById('proxy').value = v;
 }
 
-// Ask the current server who it is and who it can fail over to. This is how a
-// wallet builds its server list without shipping one.
-async function loadPeers() {
+// Ask the selected server who it is and who it can fail over to, and fold any
+// peers it names into the pulldown. This is how a wallet builds its server
+// list without shipping one.
+async function checkServer() {
   const st = document.getElementById('instanceState');
-  if (!proxyBase()) { st.textContent = 'Enter a proxy URL first.'; return; }
+  const base = proxyBase();
+  if (!base) { st.textContent = 'Enter a proxy URL first.'; return; }
+  st.textContent = `Checking ${base}…`;
   try {
-    const r = await (await fetch(proxyBase() + '/')).json();
-    if (!r.ok) { st.textContent = 'Index returned an error.'; return; }
+    const r = await (await fetch(base + '/')).json();
+    if (!r.ok) { st.textContent = `${base} answered, but its index returned an error.`; return; }
     if (r.instance) addServer(r.instance);
+    const before = SERVERS.length;
     (r.peers || []).forEach(addServer);
-    document.getElementById('proxy-pick').value = toUrl(r.instance || proxyBase());
-    st.textContent = `Connected to ${r.instance || proxyBase()}` +
-      `, signing realm "${r.site_name || '?'}"` +
-      `, ${(r.peers || []).length} peer(s) offered.`;
+    const added = SERVERS.length - before;
+
+    // Keep the pulldown on whatever the user actually selected. The server's
+    // own idea of its hostname may differ (or be unset), and silently jumping
+    // the selection elsewhere would be worse than leaving it alone.
+    const bits = [`${r.instance || base} responded`];
+    bits.push(`version ${r.version || 'unknown'}`);
+    bits.push(`signing realm "${r.site_name || '?'}"`);
+    if ((r.peers || []).length) {
+      bits.push(`offers ${r.peers.join(', ')}${added ? ` (${added} new)` : ' (already listed)'}`);
+    } else {
+      bits.push('advertises no peers (PEERS unset on that server)');
+    }
+    st.textContent = bits.join(' · ');
   } catch (e) {
-    st.textContent = 'Could not reach that server: ' + e.message;
+    st.textContent = `Could not reach ${base}: ${e.message}`;
   }
 }
 function show(obj) { document.getElementById('out').textContent = JSON.stringify(obj, null, 2); }

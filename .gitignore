@@ -7,6 +7,9 @@
 # datestamp backups — these live in a _bak/ outside the tree, but never commit
 # one that lands here by accident: they can hold pre-sanitization secrets.
 _bak/
+# session log kept locally for reference; it carries internal notes and paths
+_resume
+# expression for the `datestamp -A` prefix
 [0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]-*
 
 # vim
