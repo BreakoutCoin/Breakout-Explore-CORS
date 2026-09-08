@@ -367,17 +367,34 @@ how a pair drifts apart — one run with a forgotten secret silently mints a
 fresh one, and half the site stops honouring the other half's tokens. They
 live in a single file, shared by every domain of the site:
 
+Create it with `--init-site-config`, which is also the only place the secret
+gets generated:
+
+```bash
+./setup.sh --init-site-config ../site-configs/brk.zone-site.conf \
+           --site brk.zone --peers explore.brk.zone,api.brk.zone
+```
+
 ```ini
 # ../site-configs/brk.zone-site.conf   —   chmod 600, kept out of the repo
 site        = brk.zone
-auth-secret = 9f3c…                      # openssl rand -hex 32, once, forever
+auth-secret = 9f3c…                      # generated once, then left alone
 peers       = explore.brk.zone,api.brk.zone
 
 # optional shared placement defaults; the command line overrides these
-tls      = both
-user     = jstroud
-rpc-conf = /home/jstroud/.breakout/breakout.conf
+# tls      = both
+# user     = jstroud
+# rpc-conf = /home/jstroud/.breakout/breakout.conf
 ```
+
+It writes the file at mode 600 (with `umask 077` set *before* creating it, so
+the secret is never briefly world-readable) and **refuses to overwrite an
+existing config**. Nothing else in the tooling can replace a live secret by
+accident; if you genuinely mean to start a site over, remove the file by hand.
+
+Back the file up somewhere private. It is the only copy — lose it and every
+instance needs regenerating with a new secret, which re-authenticates every
+wallet.
 
 `peers` lists every domain of the site **including the one being generated** —
 `--domain` is pruned automatically, so one file serves every instance

@@ -32,6 +32,9 @@ DOMAIN=""
 SITE_CONFIG=""
 FORCE=0
 
+# --init-site-config mode: write a new site config and exit.
+INIT_CONFIG=""; INIT_SITE=""; INIT_PEERS=""; PEERS_GIVEN=0
+
 # Values from the command line. Empty means "not given", so the config can
 # still supply it.
 CLI_PORT=""; CLI_USER=""; CLI_INSTALL_DIR=""; CLI_RPC_CONF=""; CLI_RPC_URL=""
@@ -45,6 +48,17 @@ CFG_NODE=""; CFG_TLS=""; CFG_SERVICE_NAME=""
 usage() {
 	cat <<'EOF'
 Usage: ./setup.sh --domain <fqdn> --site-config <file> [options]
+       ./setup.sh --init-site-config <file> --site <realm> [--peers <a,b>]
+
+Creating a site config:
+  --init-site-config <f> Write a new site config at <f> with a freshly
+                         generated auth-secret, mode 600, and exit. Refuses to
+                         overwrite an existing file — that secret is the only
+                         thing keeping a site's instances interoperable.
+  --site <realm>         Signing realm for the new config (e.g. brk.zone).
+                         Required with --init-site-config.
+  --peers <a,b,c>        Every domain of the site, comma-separated. Optional;
+                         may be filled in later.
 
 Required:
   --domain <fqdn>        Public hostname for THIS instance (e.g. explore.brk.zone)
@@ -122,20 +136,118 @@ while [ $# -gt 0 ]; do
 		--service-name) [ $# -ge 2 ] || die "--service-name needs a value"; CLI_SERVICE_NAME=$2; shift 2 ;;
 		--force)        FORCE=1; shift ;;
 		-h|--help)      usage; exit 0 ;;
-		--site-name|--auth-secret|--peers)
+		--init-site-config) [ $# -ge 2 ] || die "--init-site-config needs a value"; INIT_CONFIG=$2; shift 2 ;;
+		--site)         [ $# -ge 2 ] || die "--site needs a value";         INIT_SITE=$2; shift 2 ;;
+		# --peers is meaningful when authoring a config; retired otherwise.
+		--peers)        [ $# -ge 2 ] || die "--peers needs a value";        INIT_PEERS=$2; PEERS_GIVEN=1; shift 2 ;;
+		--site-name|--auth-secret)
 			case "$1" in
 				--site-name) _k=site ;;
 				*)           _k=${1#--} ;;
 			esac
 			die "$1 was replaced by --site-config; put \"$_k\" in that file.
        Per-invocation identity is how a failover pair drifts apart, which is
-       the whole reason these moved. See --help." ;;
+       the whole reason these moved.
+       To create a config: ./setup.sh --init-site-config <file> --site <realm>" ;;
 		*)              usage >&2; die "unknown argument: $1" ;;
 	esac
 done
 
+# ---- --init-site-config: author a config, then stop ----------------------
+
+gen_secret() {
+	if command -v openssl >/dev/null 2>&1; then
+		openssl rand -hex 32
+	elif [ -r /dev/urandom ]; then
+		od -An -tx1 -N32 /dev/urandom | tr -d ' \n'
+	else
+		die "cannot generate a secret: no openssl and no readable /dev/urandom"
+	fi
+}
+
+if [ -n "$INIT_CONFIG" ]; then
+	[ -n "$INIT_SITE" ] || die "--init-site-config also needs --site <realm> (e.g. --site brk.zone)"
+	case "$INIT_SITE" in
+		*[!A-Za-z0-9.-]*) die "--site must be hostname-like: letters, digits, dots, hyphens" ;;
+	esac
+	case "$INIT_PEERS" in
+		*[!A-Za-z0-9.,-]*) die "--peers must be a comma-separated hostname list" ;;
+	esac
+	# Never clobber: the secret in an existing config is the only thing making
+	# a site's instances interoperable, and it cannot be recovered.
+	[ -e "$INIT_CONFIG" ] && die "$INIT_CONFIG already exists — refusing to overwrite.
+       Its auth-secret is what keeps this site's instances honouring each
+       other's tokens; replacing it forces every wallet to re-authenticate.
+       Remove the file yourself if you really mean to start over."
+
+	dir=$(dirname -- "$INIT_CONFIG")
+	[ -d "$dir" ] || die "directory does not exist: $dir"
+
+	# umask before creating, so the secret is never briefly world-readable.
+	_um=$(umask)
+	umask 077
+	{
+		printf '# Breakout Explore CORS — shared site config for %s\n' "$INIT_SITE"
+		printf '# Every instance of this site reads this file. Keep it out of any\n'
+		printf '# repository and do not share it: auth-secret mints bearer tokens.\n'
+		printf '# Created %s by setup.sh --init-site-config\n\n' "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+		printf 'site        = %s\n' "$INIT_SITE"
+		printf 'auth-secret = %s\n' "$(gen_secret)"
+		if [ -n "$INIT_PEERS" ]; then
+			printf 'peers       = %s\n' "$INIT_PEERS"
+		else
+			printf '\n# Every domain of this site, comma-separated. --domain is pruned\n'
+			printf '# from this list automatically, so one file serves every instance.\n'
+			printf '# peers = host-a.%s,host-b.%s\n' "$INIT_SITE" "$INIT_SITE"
+		fi
+		printf '\n# Optional shared placement defaults; the command line overrides these.\n'
+		printf '# tls          = both\n'
+		printf '# user         = %s\n' "$(id -un)"
+		printf '# install-dir  = /home/%s/breakout-proxy\n' "$(id -un)"
+		printf '# rpc-conf     = /home/%s/.breakout/breakout.conf\n' "$(id -un)"
+		printf '# rpc-url      = http://127.0.0.1:50542\n'
+		printf '# node         = /usr/bin/node\n'
+		printf '# port         = 3333\n'
+		printf '# service-name = breakout-proxy\n'
+	} > "$INIT_CONFIG"
+	umask "$_um"
+	chmod 600 "$INIT_CONFIG" 2>/dev/null || true
+
+	cat <<EOF
+
+Wrote $INIT_CONFIG (mode 600) with a fresh auth-secret.
+
+  site   $INIT_SITE
+  peers  ${INIT_PEERS:-(none yet — add every domain of the site)}
+
+This file is now the only copy of this site's auth-secret. Back it up
+somewhere private; if it is lost, every instance must be regenerated with a
+new secret and every wallet re-authenticates.
+
+Next, generate an instance:
+
+  ./setup.sh --domain <fqdn> --site-config $INIT_CONFIG
+EOF
+	exit 0
+fi
+
+# ---- normal mode ---------------------------------------------------------
+
+[ "$PEERS_GIVEN" -eq 0 ] || die "--peers is only for --init-site-config; otherwise put \"peers\" in the site config."
+[ -z "$INIT_SITE" ]      || die "--site is only for --init-site-config; otherwise put \"site\" in the site config."
+
 [ -n "$DOMAIN" ]      || { usage >&2; die "--domain is required"; }
-[ -n "$SITE_CONFIG" ] || { usage >&2; die "--site-config is required"; }
+if [ -z "$SITE_CONFIG" ]; then
+	usage >&2
+	die "--site-config is required.
+       It holds the site's signing realm and auth-secret, which every instance
+       of the site must share. If you do not have one yet, create it:
+
+           ./setup.sh --init-site-config <file> --site <realm>
+
+       e.g. ./setup.sh --init-site-config ../site-configs/brk.zone-site.conf \\
+                       --site brk.zone --peers explore.brk.zone,api.brk.zone"
+fi
 [ -d "$TEMPLATES" ]   || die "templates/ not found next to setup.sh (looked in $TEMPLATES)"
 
 # ---- site config ---------------------------------------------------------
@@ -149,7 +261,9 @@ trim() {
 
 read_site_config() {
 	conf=$1
-	[ -f "$conf" ] || die "site config not found: $conf"
+	[ -f "$conf" ] || die "site config not found: $conf
+       Create one with:
+           ./setup.sh --init-site-config \"$conf\" --site <realm>"
 	[ -r "$conf" ] || die "site config not readable: $conf"
 
 	# It holds the AUTH_SECRET; anything readable beyond the owner is a leak

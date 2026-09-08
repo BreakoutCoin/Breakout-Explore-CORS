@@ -153,15 +153,27 @@ Every instance of a site must present the same signing realm and the same
 is precisely how a pair drifts apart — so they live in one **site config**,
 shared by every domain of the site and kept outside the repository:
 
+Create one — this is the only step that generates the secret, so you never
+have to know how:
+
+```bash
+./setup.sh --init-site-config ../site-configs/brk.zone-site.conf \
+           --site brk.zone --peers explore.brk.zone,api.brk.zone
+```
+
+That writes the file at mode 600 with a fresh `auth-secret`, and refuses to
+overwrite an existing one — that secret is the only thing keeping a site's
+instances interoperable, and it cannot be recovered:
+
 ```ini
 # ../site-configs/brk.zone-site.conf   —   chmod 600, never committed
 site        = brk.zone
-auth-secret = 9f3c…                      # openssl rand -hex 32, once, forever
+auth-secret = 9f3c…                      # generated once, then left alone
 peers       = explore.brk.zone,api.brk.zone
 
 # optional shared placement defaults, overridden by the command line
-user     = jstroud
-rpc-conf = /home/jstroud/.breakout/breakout.conf
+# user     = jstroud
+# rpc-conf = /home/jstroud/.breakout/breakout.conf
 ```
 
 `peers` lists every domain of the site including the one being generated;
