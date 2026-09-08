@@ -8,14 +8,22 @@
 <VirtualHost *:80>
     ServerName @DOMAIN@
 
+    # Keep ACME http-01 challenges out of the proxy in BOTH stages. ProxyPass
+    # resolves during translate-name and beats the Alias certbot's Apache
+    # authenticator installs, so without this exclusion a renewal can find its
+    # challenge answered by the Node proxy's 404 instead.
+    ProxyPass /.well-known !
+
     # --- Stage 1: pre-certbot. Comment out once the cert exists. ---
     ProxyPreserveHost On
     ProxyPass        / http://127.0.0.1:@PORT@/
     ProxyPassReverse / http://127.0.0.1:@PORT@/
 
     # --- Stage 2: post-certbot. Uncomment these, comment out the three
-    #     ProxyPass lines above, then reload Apache. ---
+    #     ProxyPass lines above (keep the /.well-known exclusion), then
+    #     reload Apache. ---
     # RewriteEngine On
+    # RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
     # RewriteCond %{HTTPS} off
     # RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [END,NE,R=permanent]
 </VirtualHost>

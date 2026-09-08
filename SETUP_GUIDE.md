@@ -222,6 +222,8 @@ sudo tee /etc/apache2/sites-available/$DOMAIN.conf > /dev/null <<EOF
 <VirtualHost *:80>
     ServerName $DOMAIN
     RewriteEngine On
+    # Never redirect the ACME challenge — renewal answers it over plain :80.
+    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
     RewriteCond %{HTTPS} off
     RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [END,NE,R=permanent]
 </VirtualHost>
@@ -233,6 +235,15 @@ sudo apache2ctl configtest && sudo systemctl reload apache2
 The proxy directives now live in the certbot-managed `:443` vhost; the `:80`
 vhost only redirects. Auto-renewal keeps working because the Apache authenticator
 handles the ACME challenge itself rather than serving a file through `:80`.
+
+**Keep `/.well-known/acme-challenge/` clear of both the proxy and the
+redirect.** `ProxyPass` resolves during translate-name and beats the `Alias`
+certbot's authenticator installs, so a bare `ProxyPass /` on `:80` will answer
+the challenge with the Node proxy's 404. The template carries a
+`ProxyPass /.well-known !` exclusion for stage 1 and a `RewriteCond` exclusion
+for stage 2; keep whichever applies. Verify with `sudo certbot renew --dry-run`
+after any change to the `:80` vhost — a broken challenge path is invisible
+until the renewal window opens.
 
 ### Option B — Caddy (standalone host)
 
