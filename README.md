@@ -155,10 +155,20 @@ SECRET=$(openssl rand -hex 32)
            --peers explore.brk.zone --auth-secret "$SECRET"
 ```
 
-Each instance then advertises itself and its peers at `GET /`:
+Each instance then advertises its version, itself and its peers at `GET /`:
 
 ```json
-{"ok":true,"instance":"explore.brk.zone","peers":["api.brk.zone"],"site_name":"brk.zone"}
+{"ok":true,"version":"0.1.1.0","instance":"explore.brk.zone",
+ "peers":["api.brk.zone"],"site_name":"brk.zone"}
+```
+
+`version` is the proxy's own release string, so a partial redeploy is visible
+without shelling into either box:
+
+```bash
+for h in explore.brk.zone api.brk.zone; do
+  printf '%-20s %s\n' "$h" "$(curl -s "https://$h/" | jq -r .version)"
+done
 ```
 
 so a client can build its server list from the server instead of shipping one.

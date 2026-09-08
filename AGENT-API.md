@@ -110,7 +110,7 @@ curl -s -X POST "$BASE/sendrawtransaction" \
 `GET /` identifies the instance you reached and lists equivalent ones:
 
 ```json
-{"ok":true,"service":"breakout-cors-proxy",
+{"ok":true,"service":"breakout-cors-proxy","version":"0.1.1.0",
  "instance":"explore.brk.zone","peers":["api.brk.zone"],
  "site_name":"brk.zone", "...":"..."}
 ```
@@ -120,6 +120,9 @@ curl -s -X POST "$BASE/sendrawtransaction" \
 - `peers` — other hostnames serving the same chain and method set. Treat as
   failover candidates, in no particular order.
 - `site_name` — the realm named in the message users sign during auth.
+- `version` — the proxy release running on this instance. Peers are not
+  guaranteed to be on the same version; if a method you need is missing from
+  one, check `version` before assuming the host is broken.
 
 **Client guidance.** Fetch `/` once at startup from any known instance, union
 `instance` with `peers`, and keep that list. On a transport failure or 5xx,

@@ -341,8 +341,9 @@ Then deploy each `generated/<host>/` to its server as in sections 3 and 4.
   discover its failover options instead of shipping a hardcoded list:
 
 ```console
-$ curl -s https://explore.brk.zone/ | jq '{instance, peers, site_name}'
+$ curl -s https://explore.brk.zone/ | jq '{version, instance, peers, site_name}'
 {
+  "version": "0.1.1.0",
   "instance": "explore.brk.zone",
   "peers": ["api.brk.zone"],
   "site_name": "brk.zone"
@@ -442,11 +443,18 @@ curl "$BASE/gettransaction?txid=…"                     # open read (tx)
 curl "$BASE/auth/challenge?address=bx…"                # start auth
 curl -L "http://explore.brk.zone/…"                    # verify redirect
 
-# both instances agree on realm, and each knows the other
+# both instances agree on realm and version, and each knows the other
 for h in explore.brk.zone api.brk.zone; do
-  curl -s "https://$h/" | jq -c '{instance, peers, site_name}'
+  curl -s "https://$h/" | jq -c '{version, instance, peers, site_name}'
 done
 ```
+
+A version mismatch between the two means a redeploy reached only one host.
+
+`VERSION` at the top of `breakout-cors-proxy.js` is the release string the
+index reports. Bump it with each release and move the git tag to match, so
+`curl $BASE/ | jq -r .version` is a reliable answer to "what is actually
+running there".
 
 After changing `breakout-cors-proxy.js`, redeploy it to **every** instance —
 `scp` it to each `/home/jstroud/breakout-proxy/` and

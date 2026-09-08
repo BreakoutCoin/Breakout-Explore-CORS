@@ -63,6 +63,12 @@
  */
 'use strict';
  
+// Bump on every release and re-tag to match. Reported by the index at "/" so a
+// deployment can be checked for drift without shelling into each host — with
+// more than one instance behind a wallet's failover list, a partial redeploy is
+// otherwise invisible.
+const VERSION = '0.1.1.0';
+ 
 const http = require('http');
 const url = require('url');
 const fs = require('fs');
@@ -407,6 +413,7 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, {
       ok: true,
       service: 'breakout-cors-proxy',
+      version: VERSION,
       instance: PUBLIC_HOST || null,
       peers: PEERS,
       site_name: SITE_NAME,
@@ -512,7 +519,7 @@ function probeVerifyMessage() {
 }
  
 server.listen(PORT, HOST, () => {
-  console.log(`breakout-cors-proxy listening on http://${HOST}:${PORT}`);
+  console.log(`breakout-cors-proxy ${VERSION} listening on http://${HOST}:${PORT}`);
   console.log(`  -> forwarding to ${RPC_URL} (CORS: ${ALLOW_ORIGIN})`);
   console.log(`  -> identity: ${PUBLIC_HOST || '(PUBLIC_HOST unset)'}` +
               `, signing realm "${SITE_NAME}"` +
