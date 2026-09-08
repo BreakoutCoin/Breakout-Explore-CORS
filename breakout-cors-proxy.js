@@ -67,7 +67,7 @@
 // deployment can be checked for drift without shelling into each host — with
 // more than one instance behind a wallet's failover list, a partial redeploy is
 // otherwise invisible.
-const VERSION = '0.1.1.0';
+const VERSION = '0.1.2.0';
  
 const http = require('http');
 const url = require('url');
